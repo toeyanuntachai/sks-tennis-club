@@ -69,17 +69,21 @@ function renderList() {
     (active.length?'<section class="panel py-0">'+rows(active)+'</section>':'<section class="panel py-12 text-center"><h2 class="mb-2 text-lg font-bold">ยังไม่มีนัดที่เปิดอยู่</h2><p class="text-muted">จองคอร์ตแล้วกด “เปิดนัด” เพื่อชวนเพื่อนลงชื่อได้เลย</p></section>')+
     (cancelled.length?'<details class="mt-6"><summary class="cursor-pointer text-sm text-muted">นัดที่ยกเลิก · '+cancelled.length+' นัด</summary><section class="panel mt-3 py-0">'+rows(cancelled)+'</section></details>':'');
 }
-function roster(people, waiting = false) {
-  return people.length?'<ol class="divide-y divide-line">'+people.map((p,i)=>'<li class="flex items-center gap-3 py-3"><span class="grid size-9 shrink-0 place-items-center rounded-full bg-sage text-sm">'+(waiting?i+1:esc(p.nickname?.slice(0,1)))+'</span><span>'+esc(p.nickname)+'</span>'+(p.id===member.id?'<span class="ml-auto text-xs font-semibold text-leaf">คุณ</span>':'')+'</li>').join('')+'</ol>':'<p class="py-3 text-muted">ยังไม่มีรายชื่อ</p>';
+function roster(people, waiting = false, editable = false) {
+  return people.length?'<ol class="divide-y divide-line">'+people.map((p,i)=>'<li class="flex items-center gap-3 py-3"><span class="grid size-9 shrink-0 place-items-center rounded-full bg-sage text-sm">'+(waiting?i+1:esc(p.nickname?.slice(0,1)))+'</span><span class="min-w-0 flex-1 break-words">'+esc(p.nickname)+(p.id===member.id?'<small class="ml-2 text-leaf">คุณ</small>':'')+'</span>'+
+    (editable?'<label class="flex min-h-11 shrink-0 cursor-pointer items-center gap-2 text-sm"><input id="payment-'+esc(p.id)+'" type="checkbox" data-payment="'+esc(p.id)+'" aria-label="จ่ายแล้ว: '+esc(p.nickname)+'" class="size-5 accent-leaf" '+(p.paid?'checked':'')+'><span>'+(p.paid?'จ่ายแล้ว':'ยังไม่จ่าย')+'</span></label>':'<span class="shrink-0 text-sm '+(p.paid?'font-semibold text-leaf':'text-muted')+'">'+(p.paid?'จ่ายแล้ว':'ยังไม่จ่าย')+'</span>')+'</li>').join('')+'</ol>':'<p class="py-3 text-muted">ยังไม่มีรายชื่อ</p>';
 }
 function renderDetail(e) {
+  const editablePayments = e.isOrganizer && !e.cancelled;
   const status = !e.myPosition ? 'ยังไม่ได้ลงชื่อ' : e.myPosition <= e.capacity ? 'คุณได้ที่ในนัดนี้แล้ว' : 'คุณอยู่คิวสำรองลำดับ '+(e.myPosition-e.capacity);
   const fact=(label,value)=>'<div><dt class="text-sm text-muted">'+label+'</dt><dd class="mt-1 font-semibold">'+esc(value)+'</dd></div>';
   return '<button id="back-link" data-list class="mb-6 min-h-11 text-sm font-semibold">← นัดทั้งหมด</button>'+
     '<div class="mb-5 grid gap-5 md:grid-cols-[1.4fr_1fr]"><section class="panel">'+badge(e)+'<h1 id="page-title" tabindex="-1" class="my-4 text-3xl font-bold">'+esc(e.title)+'</h1><p>'+esc(e.venue)+'</p><dl class="mt-6 grid grid-cols-2 gap-5">'+fact('วันตี',dateLabel(e.date))+fact('เวลา',e.start+'–'+e.end)+fact('คอร์ตที่จอง',e.courtNames)+fact('ผู้จัดนัด',e.organizerName)+'</dl></section>'+
     '<aside class="panel flex flex-col justify-center bg-sage"><p class="text-xs font-semibold tracking-wide text-leaf">ลงชื่อทั้งนัด</p><p class="my-3 text-5xl font-bold">'+e.confirmed+' <span class="text-xl font-normal">/ '+e.capacity+' คน</span></p><p>คิวสำรอง '+e.waiting+' คน</p><p class="mt-3 font-semibold">'+status+'</p></aside></div>'+
     (e.cancelled?'<p class="mb-5 rounded-xl bg-sage p-4">นัดนี้ยกเลิกแล้ว รายชื่อด้านล่างเป็นประวัติของนัด</p>':'<div class="mb-5 flex flex-wrap gap-3"><button id="signup-button" data-signup class="btn '+(e.myPosition?'btn-danger':'btn-primary')+' flex-1">'+(e.myPosition?'ถอนชื่อของฉัน':e.confirmed>=e.capacity?'เข้าคิวสำรอง':'ลงชื่อนัดนี้')+'</button><button id="share-button" data-share class="btn">แชร์นัดใน LINE</button></div>')+
-    '<div class="grid gap-5 md:grid-cols-2"><section class="panel"><h2 class="mb-3 text-xl font-bold">ผู้เข้าร่วม · '+e.confirmed+' คน</h2>'+roster(e.participants)+'</section><section class="panel"><h2 class="mb-3 text-xl font-bold">คิวสำรอง · '+e.waiting+' คน</h2><p class="mb-2 text-sm text-muted">เรียงตามลำดับลงชื่อ คนแรกได้เลื่อนเข้าแทนเมื่อมีคนถอน</p>'+roster(e.waitlist,true)+'</section></div>'+
+    '<p class="mb-3 text-sm text-muted">สถานะจ่ายเงินบันทึกโดยผู้เปิดนัด'+(editablePayments?' · ติ๊กเมื่อได้รับเงินแล้ว':'')+'</p>'+
+    '<div class="grid gap-5 md:grid-cols-2"><section class="panel"><h2 class="mb-3 text-xl font-bold">ผู้เข้าร่วม · '+e.confirmed+' คน</h2>'+roster(e.participants,false,editablePayments)+'</section><section class="panel"><h2 class="mb-3 text-xl font-bold">คิวสำรอง · '+e.waiting+' คน</h2><p class="mb-2 text-sm text-muted">เรียงตามลำดับลงชื่อ คนแรกได้เลื่อนเข้าแทนเมื่อมีคนถอน</p>'+roster(e.waitlist,true,editablePayments)+'</section></div>'+
+    (e.withdrawn?.length?'<section class="panel mt-5"><h2 class="mb-2 text-xl font-bold">ถอนชื่อแล้ว · '+e.withdrawn.length+' คน</h2><p class="mb-2 text-sm text-muted">เก็บสถานะจ่ายไว้ให้ผู้จัดตรวจสอบ ไม่นับเป็นผู้เข้าร่วมหรือคิวสำรอง</p>'+roster(e.withdrawn,false,editablePayments)+'</section>':'')+
     (e.isOrganizer&&!e.cancelled?'<div class="mt-6 flex gap-3"><button id="edit-button" data-edit class="btn">แก้ไขนัด</button><button id="cancel-button" data-cancel class="btn btn-danger">ยกเลิกนัด</button></div>':'');
 }
 function renderForm() {
@@ -189,6 +193,17 @@ document.addEventListener('submit',event=>{
     event.preventDefault();const fields=Object.fromEntries(new FormData(event.target));fields.courts=Number(fields.courts);fields.capacity=Number(fields.capacity);
     return run(async()=>{selected=(await api(selected?'/events/'+encodeURIComponent(selected.id):'/events',selected?'PATCH':'POST',fields)).event;move('detail');notify('บันทึกนัดแล้ว');});
   }
+});
+document.addEventListener('change',event=>{
+  const input = event.target;
+  if (!input.hasAttribute('data-payment')) return;
+  if (busy) {render();return;}
+  return run(async()=>{
+    try {
+      selected = (await api('/events/'+encodeURIComponent(selected.id)+'/payment','PATCH',{memberId:input.dataset.payment,paid:input.checked})).event;
+      render();notify('บันทึกสถานะจ่ายเงินแล้ว');
+    } catch (error) {render();throw error;}
+  });
 });
 document.getElementById('dismiss-cancel').onclick=()=>document.getElementById('confirm-dialog').close();
 document.getElementById('confirm-cancel').onclick=()=>run(async()=>{selected=(await api('/events/'+encodeURIComponent(selected.id)+'/cancel','POST',{})).event;document.getElementById('confirm-dialog').close();render();notify('ยกเลิกนัดแล้ว');});

@@ -53,6 +53,12 @@ db.exec(`
     UNIQUE(event_id, member_id)
   );
   CREATE INDEX IF NOT EXISTS registrations_event ON registrations(event_id, sequence);
+  CREATE TABLE IF NOT EXISTS event_payments (
+    event_id TEXT NOT NULL REFERENCES events(id),
+    member_id TEXT NOT NULL REFERENCES members(id),
+    paid INTEGER NOT NULL CHECK(paid IN (0, 1)),
+    PRIMARY KEY(event_id, member_id)
+  );
 `);
 
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -133,12 +139,20 @@ function eventView(row, member) {
 }
 function detail(id, member) {
   const event = eventView(eventRow(id), member);
-  const rows = db.prepare(`SELECT m.id, m.nickname FROM registrations r
-    JOIN members m ON m.id = r.member_id WHERE r.event_id = ? ORDER BY r.sequence`).all(id);
+  const rows = db.prepare(`SELECT m.id, m.nickname, COALESCE(p.paid, 0) AS paid FROM registrations r
+    JOIN members m ON m.id = r.member_id
+    LEFT JOIN event_payments p ON p.event_id = r.event_id AND p.member_id = r.member_id
+    WHERE r.event_id = ? ORDER BY r.sequence`).all(id).map(p => ({ ...p, paid: Boolean(p.paid) }));
+  const withdrawn = db.prepare(`SELECT m.id, m.nickname, p.paid FROM event_payments p
+    JOIN members m ON m.id = p.member_id
+    WHERE p.event_id = ? AND NOT EXISTS (
+      SELECT 1 FROM registrations r WHERE r.event_id = p.event_id AND r.member_id = p.member_id
+    ) ORDER BY m.nickname, m.id`).all(id).map(p => ({ ...p, paid: Boolean(p.paid) }));
   return {
     ...event,
     participants: rows.slice(0, event.capacity),
-    waitlist: rows.slice(event.capacity)
+    waitlist: rows.slice(event.capacity),
+    withdrawn
   };
 }
 const loginAttempts = new Map();
@@ -247,10 +261,26 @@ export async function handleRequest(req, res) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, member.id, fields.title, fields.venue, fields.date, fields.start, fields.end, fields.courts, fields.courtNames, fields.capacity);
       return send(res, 201, { event: detail(id, member) });
     }
-    const match = path.match(/^\/api\/events\/([^/]+)(?:\/(signup|cancel))?$/);
+    const match = path.match(/^\/api\/events\/([^/]+)(?:\/(signup|cancel|payment))?$/);
     if (!match) fail(404, 'ไม่พบข้อมูลนี้');
     const [, id, action] = match;
     if (req.method === 'GET' && !action) return send(res, 200, { event: detail(id, member) });
+    if (req.method === 'PATCH' && action === 'payment') {
+      const data = await body(req);
+      const memberId = text(data.memberId, 'สมาชิก', 64);
+      if (typeof data.paid !== 'boolean') fail(400, 'สถานะจ่ายเงินไม่ถูกต้อง');
+      atomic(() => {
+        const event = eventRow(id);
+        if (event.organizer_id !== member.id) fail(403, 'เฉพาะผู้สร้างนัดเท่านั้นที่เปลี่ยนสถานะจ่ายเงินได้');
+        if (event.cancelled) fail(409, 'นัดนี้ยกเลิกแล้ว');
+        const registered = db.prepare('SELECT 1 FROM registrations WHERE event_id = ? AND member_id = ?').get(id, memberId);
+        const payment = db.prepare('SELECT 1 FROM event_payments WHERE event_id = ? AND member_id = ?').get(id, memberId);
+        if (!registered && !payment) fail(404, 'ไม่พบสมาชิกในรายชื่อนัดนี้');
+        db.prepare(`INSERT INTO event_payments(event_id, member_id, paid) VALUES (?, ?, ?)
+          ON CONFLICT(event_id, member_id) DO UPDATE SET paid = excluded.paid`).run(id, memberId, Number(data.paid));
+      });
+      return send(res, 200, { event: detail(id, member) });
+    }
     if (req.method === 'PATCH' && !action) {
       const fields = eventFields(await body(req));
       atomic(() => {
