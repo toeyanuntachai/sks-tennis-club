@@ -13,7 +13,7 @@
 - แชร์ข้อความและลิงก์นัดผ่านตัวเลือกผู้รับของ LINE หรือคัดลอกไปส่งเอง
 - ดึงรายชื่อใหม่ทุก 15 วินาทีขณะเปิดหน้ารายการ/รายละเอียด และมีปุ่มอัปเดตเอง
 
-เผยแพร่แล้วที่ [SKS Tennis Club](https://sks-tennis-club-production.up.railway.app/) แต่ **ยังไม่ได้เชื่อม LINE** เพราะยังไม่มี Channel ID และ LIFF ID หน้าต้อนรับจะแสดงว่ากำลังเตรียมเปิดใช้งานจนตั้งค่าครบ
+เผยแพร่แล้วที่ [SKS Tennis Club](https://sks-tennis-club-production.up.railway.app/) และตั้งค่า LINE Login Channel ID `2011854065` กับ LIFF ID `2011854065-FGuLpgtP` แล้ว LIFF SDK โหลดได้และปุ่มเข้าใช้งานเปิดหน้า LINE Login ได้ แต่ **ยังต้องตรวจรับการล็อกอินและแชร์ด้วยบัญชี LINE จริง** ก่อนเปิดให้ทั้งกลุ่ม
 
 ## เปิดในเครื่อง
 
@@ -71,7 +71,7 @@ node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'
 
 โครงการ [sks-tennis-club](https://railway.com/project/48d7e695-2a07-4927-9af3-367a05080def) เชื่อม GitHub branch `main` แล้ว รันหนึ่ง instance ใน Singapore และเก็บ SQLite บน Volume ที่ `/data` ตั้ง `PORT=8080`, `SKS_ORIGIN` และ invite code ไว้ใน Railway Variables แล้ว ไม่ต้องสร้าง invite code ใหม่
 
-ใช้ `https://sks-tennis-club-production.up.railway.app/` เป็น LIFF Endpoint URL เมื่อสร้าง LIFF แล้วเติมเพียง `LINE_LOGIN_CHANNEL_ID` และ `LINE_LIFF_ID` ใน Railway Variables จากนั้น deploy และตรวจรับการเข้าสู่ระบบ/แชร์ด้วย LINE จริง
+ใช้ `https://sks-tennis-club-production.up.railway.app/` เป็น LIFF Endpoint URL ตั้ง `LINE_LOGIN_CHANNEL_ID` และ `LINE_LIFF_ID` ใน Railway Variables และ deploy แล้ว เข้าครั้งแรกด้วยลิงก์ LIFF ที่มี invite code จาก Railway Variables จากนั้นตรวจรับการเข้าสู่ระบบ/แชร์ด้วย LINE จริง
 
 ใช้ Node.js 24 ตาม `.node-version` Railway ตรวจคำสั่ง build/start จาก `package.json` โดย `prebuild` ทดสอบก่อน build Tailwind ตั้ง Healthcheck Path ของ service เป็น `/`
 
