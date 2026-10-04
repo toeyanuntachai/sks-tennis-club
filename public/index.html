@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="เปิดนัด ลงชื่อ และจัดคิวสำรองสำหรับสมาชิก SKS Tennis Club">
+  <title>SKS Tennis Club — ลงชื่อนัดตี</title>
+  <link rel="icon" href="/sks-logo.png" type="image/png">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:bg-surface focus:p-3" href="#app">ข้ามไปเนื้อหา</a>
+  <header class="mx-auto flex max-w-5xl items-center justify-between gap-4 border-b border-line px-4 py-5 sm:px-6">
+    <a href="/" class="flex min-w-0 items-center gap-3">
+      <img src="/sks-logo.png" alt="โลโก้ SKS Tennis Club" width="56" height="56" class="size-12 shrink-0 rounded-full sm:size-14">
+      <span class="font-serif text-lg font-bold tracking-wide sm:text-xl">SKS Tennis Club<span class="mt-1 block font-sans text-xs font-normal tracking-normal text-muted">สังกะสีเทนนิสคลับ</span></span>
+    </a>
+    <div id="account" class="shrink-0"></div>
+  </header>
+  <main id="app" class="mx-auto max-w-5xl px-4 py-8 pb-24 sm:px-6" aria-busy="true">
+    <p role="status" class="py-20 text-center text-muted">กำลังเปิดนัดตีของกลุ่ม…</p>
+  </main>
+  <footer class="px-4 pb-8 text-center text-xs text-muted">SKS Tennis Club · เจอกันที่คอร์ต</footer>
+  <div id="toast" role="status" aria-live="polite" class="fixed bottom-6 left-1/2 z-50 hidden w-max max-w-[calc(100%-2rem)] -translate-x-1/2 rounded-xl bg-navy px-5 py-3 text-sm text-cream shadow-lg"></div>
+  <dialog id="confirm-dialog" class="w-[calc(100%-2rem)] max-w-md rounded-2xl border border-line bg-surface p-6 text-navy">
+    <h2 class="mb-3 text-xl font-bold">ยกเลิกนัดนี้?</h2>
+    <p class="mb-5 text-muted">นัดจะไม่รับลงชื่อเพิ่ม และสมาชิกยังดูประวัติรายชื่อได้</p>
+    <div class="flex flex-wrap gap-3"><button id="confirm-cancel" class="btn btn-danger">ยืนยันยกเลิกนัด</button><button id="dismiss-cancel" class="btn">กลับไปก่อน</button></div>
+  </dialog>
+  <dialog id="share-dialog" class="w-[calc(100%-2rem)] max-w-md rounded-2xl border border-line bg-surface p-6 text-navy">
+    <h2 class="mb-3 text-xl font-bold">ลิงก์นัดสำหรับแชร์ในกลุ่ม</h2>
+    <p class="mb-3 text-sm text-muted">คนที่มีลิงก์นี้เข้าร่วมกลุ่มและลงชื่อได้</p>
+    <label class="label">คัดลอกข้อความไปส่งใน LINE<textarea id="share-text" readonly rows="7" class="field resize-none"></textarea></label>
+    <form method="dialog" class="mt-5"><button class="btn">ปิด</button></form>
+  </dialog>
+</body>
+</html>
