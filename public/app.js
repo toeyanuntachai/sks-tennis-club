@@ -3,7 +3,18 @@ const params = new URLSearchParams(location.search);
 let invite = params.get('invite') || '', requestedEvent = params.get('event');
 let config, member = null, events = [], selected = null, screen = 'welcome', busy = false, toastTimer, suggestedNickname = '', liffReady;
 let participantForm = null;
+let paymentQrDraft, paymentQrPreview = '';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const money = satang => new Intl.NumberFormat('th-TH', {maximumFractionDigits:2}).format(satang / 100);
+const paymentQrUrl = id => '/api/events/'+encodeURIComponent(id)+'/payment-qr';
+function costSatang(value) {
+  if (value === '') return null;
+  if (typeof value !== 'string' || !/^\d+(?:\.\d{1,2})?$/.test(value)) throw new Error('ค่าใช้จ่ายต้องไม่ติดลบและมีทศนิยมไม่เกิน 2 ตำแหน่ง');
+  const [baht, fraction = ''] = value.split('.');
+  const satang = Number(baht) * 100 + Number(fraction.padEnd(2, '0'));
+  if (!Number.isSafeInteger(satang)) throw new Error('ค่าใช้จ่ายสูงเกินไป');
+  return satang;
+}
 const dateLabel = value => new Intl.DateTimeFormat('th-TH', { weekday:'short', day:'numeric', month:'short' }).format(new Date(value + 'T12:00:00'));
 const today = () => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en', {timeZone:'Asia/Bangkok',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(p => [p.type,p.value]));
@@ -76,6 +87,14 @@ function roster(people, waiting = false, editable = false, withdrawn = false) {
     (editable?'<label class="flex min-h-11 shrink-0 cursor-pointer items-center gap-2 text-sm"><input id="payment-'+esc(p.id)+'" type="checkbox" data-payment="'+esc(p.id)+'" aria-label="จ่ายแล้ว: '+esc(p.nickname)+'" class="size-5 accent-leaf" '+(p.paid?'checked':'')+'><span>'+(p.paid?'จ่ายแล้ว':'ยังไม่จ่าย')+'</span></label>':'<span class="shrink-0 text-sm '+(p.paid?'font-semibold text-leaf':'text-muted')+'">'+(p.paid?'จ่ายแล้ว':'ยังไม่จ่าย')+'</span>')+'</div>'+
     (editable?'<div class="ml-12 flex flex-wrap gap-x-4">'+(withdrawn?action(p,'restore-participant','เพิ่มกลับ'):action(p,'remove-participant','ถอนชื่อ'))+(p.isGuest?action(p,'rename-participant','แก้ชื่อ')+action(p,'link-participant','ผูกบัญชี'):'')+'</div>':'')+'</li>').join('')+'</ol>':'<p class="py-3 text-muted">ยังไม่มีรายชื่อ</p>';
 }
+function renderCosts(e) {
+  const hasCosts = e.totalCostSatang != null;
+  if (!hasCosts && !e.hasPaymentQr) return '';
+  return '<section class="panel mb-5"><h2 class="mb-4 text-xl font-bold">ค่าใช้จ่ายและการจ่ายเงิน</h2><div class="grid gap-6 '+(e.hasPaymentQr?'sm:grid-cols-2':'')+'">'+
+    (hasCosts?'<div><dl class="space-y-2">'+(e.courtCostSatang!=null?'<div class="flex justify-between gap-3"><dt>ค่าคอร์ตรวม</dt><dd>'+money(e.courtCostSatang)+' บาท</dd></div>':'')+(e.ballCostSatang!=null?'<div class="flex justify-between gap-3"><dt>ค่าลูกเทนนิสรวม</dt><dd>'+money(e.ballCostSatang)+' บาท</dd></div>':'')+'<div class="flex justify-between gap-3 border-t border-line pt-3 font-semibold"><dt>รวมค่าใช้จ่ายที่ระบุ</dt><dd>'+money(e.totalCostSatang)+' บาท</dd></div></dl>'+
+    (e.sharePerPersonSatang==null?'<p class="mt-5 text-muted">รอผู้เข้าร่วมเพื่อคำนวณยอดต่อคน</p>':'<div class="mt-5 rounded-xl bg-sage p-4"><p class="text-sm">หารผู้ได้ที่ในนัด '+e.sharePeople+' คน</p><p class="mt-2 text-3xl font-bold">'+money(e.sharePerPersonSatang)+' <span class="text-base font-normal">บาท/คน</span></p><p class="mt-2 text-sm text-muted">ปัดขึ้นเป็นบาท · ส่วนเกินรวม '+money(e.roundingSurplusSatang)+' บาท</p></div>')+'<p class="mt-3 text-sm text-muted">ยอดเปลี่ยนตามจำนวนผู้เข้าร่วม ไม่รวมคิวสำรองและคนถอนชื่อ เช็คจ่ายเดิมยังอยู่ ผู้จัดตรวจส่วนต่างเอง</p></div>':'')+
+    (e.hasPaymentQr?'<div class="'+(!hasCosts?'sm:col-span-2':'')+'"><p class="mb-3 font-semibold">QR จ่ายเงิน</p><button data-expand-qr aria-label="ขยาย QR จ่ายเงิน" class="block rounded-xl border border-line bg-white p-3"><img src="'+paymentQrUrl(e.id)+'" alt="QR จ่ายเงินที่ผู้จัดแนบ" class="max-h-64 w-56 max-w-full object-contain"></button><p class="mt-2 text-sm text-muted">แตะรูปเพื่อขยาย</p></div>':'')+'</div></section>';
+}
 function renderDetail(e) {
   const editablePayments = e.isOrganizer && !e.cancelled;
   const status = !e.myPosition ? 'ยังไม่ได้ลงชื่อ' : e.myPosition <= e.capacity ? 'คุณได้ที่ในนัดนี้แล้ว' : 'คุณอยู่คิวสำรองลำดับ '+(e.myPosition-e.capacity);
@@ -84,6 +103,7 @@ function renderDetail(e) {
     '<div class="mb-5 grid gap-5 md:grid-cols-[1.4fr_1fr]"><section class="panel">'+badge(e)+'<h1 id="page-title" tabindex="-1" class="my-4 text-3xl font-bold">'+esc(e.title)+'</h1><p>'+esc(e.venue)+'</p><dl class="mt-6 grid grid-cols-2 gap-5">'+fact('วันตี',dateLabel(e.date))+fact('เวลา',e.start+'–'+e.end)+fact('คอร์ตที่จอง',e.courtNames)+fact('ผู้จัดนัด',e.organizerName)+'</dl></section>'+
     '<aside class="panel flex flex-col justify-center bg-sage"><p class="text-xs font-semibold tracking-wide text-leaf">ลงชื่อทั้งนัด</p><p class="my-3 text-5xl font-bold">'+e.confirmed+' <span class="text-xl font-normal">/ '+e.capacity+' คน</span></p><p>คิวสำรอง '+e.waiting+' คน</p><p class="mt-3 font-semibold">'+status+'</p></aside></div>'+
     (e.cancelled?'<p class="mb-5 rounded-xl bg-sage p-4">นัดนี้ยกเลิกแล้ว รายชื่อด้านล่างเป็นประวัติของนัด</p>':'<div class="mb-5 flex flex-wrap gap-3"><button id="signup-button" data-signup class="btn '+(e.myPosition?'btn-danger':'btn-primary')+' flex-1">'+(e.myPosition?'ถอนชื่อของฉัน':e.confirmed>=e.capacity?'เข้าคิวสำรอง':'ลงชื่อนัดนี้')+'</button><button id="share-button" data-share class="btn">แชร์นัดใน LINE</button></div>')+
+    renderCosts(e)+
     '<div class="mb-3 flex flex-wrap items-center justify-between gap-3"><p class="text-sm text-muted">สถานะจ่ายเงินบันทึกโดยผู้เปิดนัด'+(editablePayments?' · ติ๊กเมื่อได้รับเงินแล้ว':'')+'</p>'+(editablePayments?'<button data-add-participant class="btn">+ เพิ่มรายชื่อ</button>':'')+'</div>'+
     '<div class="grid gap-5 md:grid-cols-2"><section class="panel"><h2 class="mb-3 text-xl font-bold">ผู้เข้าร่วม · '+e.confirmed+' คน</h2>'+roster(e.participants,false,editablePayments)+'</section><section class="panel"><h2 class="mb-3 text-xl font-bold">คิวสำรอง · '+e.waiting+' คน</h2><p class="mb-2 text-sm text-muted">เรียงตามลำดับลงชื่อ คนแรกได้เลื่อนเข้าแทนเมื่อมีคนถอน</p>'+roster(e.waitlist,true,editablePayments)+'</section></div>'+
     (e.withdrawn?.length?'<section class="panel mt-5"><h2 class="mb-2 text-xl font-bold">ถอนชื่อแล้ว · '+e.withdrawn.length+' คน</h2><p class="mb-2 text-sm text-muted">เก็บสถานะจ่ายไว้ให้ผู้จัดตรวจสอบ ไม่นับเป็นผู้เข้าร่วมหรือคิวสำรอง</p>'+roster(e.withdrawn,false,editablePayments,true)+'</section>':'')+
@@ -94,7 +114,28 @@ function renderForm() {
   const field=(name,label,type,value,extra='',wide=false)=>'<label class="label '+(wide?'col-span-2':'')+'">'+label+'<input class="field" name="'+name+'" type="'+type+'" value="'+esc(value)+'" required '+extra+'></label>';
   return '<section class="mx-auto max-w-2xl"><button data-back class="mb-6 min-h-11 text-sm font-semibold">← กลับ</button><h1 id="page-title" tabindex="-1" class="mb-3 text-3xl font-bold">'+(selected?'แก้ไขนัด':'เปิดนัดใหม่')+'</h1><p class="mb-6 text-muted">ใส่รายละเอียดคอร์ตที่จองไว้ สมาชิกลงชื่อทั้งนัด</p><form id="event-form" class="panel"><div class="grid grid-cols-2 gap-4">'+
     field('title','ชื่อนัด','text',e.title,'maxlength="80"',true)+field('venue','สนาม','text',e.venue,'maxlength="120"',true)+field('date','วันที่','date',e.date,'',true)+field('start','เริ่ม','time',e.start)+field('end','สิ้นสุด','time',e.end)+field('courts','จำนวนคอร์ต','number',e.courts,'min="1" max="10000" step="1"')+field('capacity','จำนวนคนที่รับ','number',e.capacity,'min="'+Math.max(1,selected?.confirmed||1)+'" max="10000" step="1"')+field('courtNames','ชื่อหรือหมายเลขคอร์ต','text',e.courtNames,'maxlength="100" placeholder="เช่น คอร์ต 1, 2"',true)+
-    '</div><p class="mt-4 text-sm text-muted">เมื่อเต็ม คนถัดไปเข้าคิวสำรอง ผู้จัดต้องลงชื่อเองหากจะร่วมเล่น</p><button type="submit" class="btn btn-primary mt-6 w-full">'+(selected?'บันทึกการแก้ไข':'สร้างนัด')+'</button></form></section>';
+    '</div><fieldset class="mt-6 border-t border-line pt-5"><legend class="pt-5 text-lg font-bold">ค่าใช้จ่ายและ QR (ไม่บังคับ)</legend><div class="mt-4 grid gap-4 sm:grid-cols-2">'+
+    '<label class="label">ค่าคอร์ตรวม (บาท)<input class="field" name="courtCost" type="number" min="0" step="0.01" inputmode="decimal" value="'+(e.courtCostSatang==null?'':e.courtCostSatang/100)+'" placeholder="ไม่ระบุ"></label>'+
+    '<label class="label">ค่าลูกเทนนิสรวม (บาท)<input class="field" name="ballCost" type="number" min="0" step="0.01" inputmode="decimal" value="'+(e.ballCostSatang==null?'':e.ballCostSatang/100)+'" placeholder="ไม่ระบุ"></label></div>'+
+    '<p class="mt-3 text-sm text-muted">รวมค่าใช้จ่ายที่ระบุ หารเฉพาะผู้ได้ที่ในนัด และปัดขึ้นเป็นบาท</p><label class="label mt-5">รูป QR จ่ายเงิน<input id="payment-qr-file" type="file" accept="image/png,image/jpeg" class="field"></label><p class="mt-2 text-sm text-muted">PNG หรือ JPEG ไม่เกิน 2 MB</p><div id="payment-qr-preview" class="mt-3">'+renderQrPreview()+'</div></fieldset>'+
+    '<p class="mt-4 text-sm text-muted">เมื่อเต็ม คนถัดไปเข้าคิวสำรอง ผู้จัดต้องลงชื่อเองหากจะร่วมเล่น</p><p id="event-error" role="alert" class="mt-4 text-sm text-red-800"></p><button type="submit" class="btn btn-primary mt-6 w-full">'+(selected?'บันทึกการแก้ไข':'สร้างนัด')+'</button></form></section>';
+}
+function renderQrPreview() {
+  const src = paymentQrDraft === null ? '' : paymentQrPreview || (selected?.hasPaymentQr ? paymentQrUrl(selected.id) : '');
+  return src ? '<img src="'+esc(src)+'" alt="ตัวอย่าง QR จ่ายเงิน" class="max-h-56 max-w-full rounded-xl border border-line bg-white p-2"><button type="button" data-remove-qr class="mt-2 min-h-11 text-sm text-red-800 underline underline-offset-4">ลบรูป QR</button>' : '';
+}
+async function readPaymentQr(file) {
+  if (file.size > 2 * 1024 * 1024) throw new Error('รูป QR ต้องไม่เกิน 2 MB');
+  if (!['image/png','image/jpeg'].includes(file.type)) throw new Error('รูป QR ต้องเป็นไฟล์ PNG หรือ JPEG');
+  const src = await new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>resolve(reader.result);
+    reader.onerror = ()=>reject(new Error('อ่านรูป QR ไม่สำเร็จ กรุณาเลือกไฟล์อีกครั้ง'));
+    reader.readAsDataURL(file);
+  });
+  const image = new Image(); image.src = src;
+  try {await image.decode();} catch {throw new Error('เปิดรูป QR ไม่สำเร็จ กรุณาเลือกไฟล์ PNG หรือ JPEG ที่สมบูรณ์');}
+  return src;
 }
 function renderProfile() {
   return '<section class="panel mx-auto max-w-md"><h1 id="page-title" tabindex="-1" class="mb-3 text-2xl font-bold">'+(member.nickname?'ชื่อเล่นในกลุ่ม':'เข้าร่วม SKS Tennis Club')+'</h1><p class="mb-6 text-muted">ใช้ชื่อที่เพื่อนในสนามรู้จัก เพื่อให้หาในรายชื่อได้ง่าย</p><form id="profile-form"><label class="label">ชื่อเล่น<input id="nickname" class="field" name="nickname" maxlength="40" value="'+esc(member.nickname||suggestedNickname)+'" autocomplete="nickname" required></label><button type="submit" class="btn btn-primary mt-5 w-full">บันทึกชื่อเล่น</button></form></section>';
@@ -190,8 +231,10 @@ document.addEventListener('click',event=>{
   if(button.hasAttribute('data-list'))return run(list);
   if(button.dataset.go)return run(()=>openEvent(button.dataset.go));
   if(button.hasAttribute('data-refresh'))return run(()=>refresh());
-  if(button.hasAttribute('data-create')){selected=null;return move('form');}
-  if(button.hasAttribute('data-edit'))return move('form');
+  if(button.hasAttribute('data-create')){selected=null;paymentQrDraft=undefined;paymentQrPreview='';return move('form');}
+  if(button.hasAttribute('data-edit')){paymentQrDraft=undefined;paymentQrPreview='';return move('form');}
+  if(button.hasAttribute('data-expand-qr')){document.getElementById('payment-qr-large').src=paymentQrUrl(selected.id);return document.getElementById('payment-qr-dialog').showModal();}
+  if(button.hasAttribute('data-remove-qr')){paymentQrDraft=null;paymentQrPreview='';document.getElementById('payment-qr-file').value='';document.getElementById('payment-qr-preview').innerHTML='';return;}
   if(button.hasAttribute('data-back'))return selected?move('detail'):run(list);
   if(button.hasAttribute('data-profile'))return move('profile');
   if(button.hasAttribute('data-logout'))return run(async()=>{await api('/logout','POST',{});member=null;selected=null;events=[];move('welcome');});
@@ -245,11 +288,29 @@ document.addEventListener('submit',event=>{
   }
   if(event.target.id==='event-form'){
     event.preventDefault();const fields=Object.fromEntries(new FormData(event.target));fields.courts=Number(fields.courts);fields.capacity=Number(fields.capacity);
-    return run(async()=>{selected=(await api(selected?'/events/'+encodeURIComponent(selected.id):'/events',selected?'PATCH':'POST',fields)).event;move('detail');notify('บันทึกนัดแล้ว');});
+    return run(async()=>{
+      try {
+        fields.courtCostSatang=costSatang(fields.courtCost);fields.ballCostSatang=costSatang(fields.ballCost);
+        delete fields.courtCost;delete fields.ballCost;
+        if(paymentQrDraft!==undefined)fields.paymentQr=paymentQrDraft;
+        selected=(await api(selected?'/events/'+encodeURIComponent(selected.id):'/events',selected?'PATCH':'POST',fields)).event;
+        paymentQrDraft=undefined;paymentQrPreview='';move('detail');notify('บันทึกนัดแล้ว');
+      } catch(error) {document.getElementById('event-error').textContent=error.message;throw error;}
+    });
   }
 });
 document.addEventListener('change',event=>{
   const input = event.target;
+  if(input.id==='payment-qr-file'){
+    if(!input.files?.[0])return;
+    const file=input.files[0];
+    return run(async()=>{
+      try {
+        paymentQrPreview=await readPaymentQr(file);paymentQrDraft=paymentQrPreview.split(',')[1];
+        document.getElementById('payment-qr-preview').innerHTML=renderQrPreview();document.getElementById('event-error').textContent='';
+      } catch(error) {input.value='';document.getElementById('event-error').textContent=error.message;throw error;}
+    });
+  }
   if(input.id==='participant-mode'){participantForm.mode=input.value;renderParticipantForm();return;}
   if (!input.hasAttribute('data-payment')) return;
   if (busy) {render();return;}

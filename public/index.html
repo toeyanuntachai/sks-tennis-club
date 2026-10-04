@@ -44,5 +44,10 @@
     <p id="remove-participant-error" role="alert" class="mb-4 text-sm text-red-800"></p>
     <div class="flex flex-wrap gap-3"><button id="remove-participant-confirm" class="btn btn-danger">ยืนยันถอนชื่อ</button><button data-dismiss-remove class="btn">กลับไปก่อน</button></div>
   </dialog>
+  <dialog id="payment-qr-dialog" aria-labelledby="payment-qr-title" class="m-auto w-[calc(100%-2rem)] max-w-lg rounded-2xl border border-line bg-surface p-5 text-navy">
+    <h2 id="payment-qr-title" class="mb-4 text-xl font-bold">QR จ่ายเงิน</h2>
+    <img id="payment-qr-large" alt="QR จ่ายเงินที่ผู้จัดแนบ" class="mx-auto max-h-[70vh] max-w-full bg-white object-contain">
+    <form method="dialog" class="mt-4"><button class="btn w-full">ปิด</button></form>
+  </dialog>
 </body>
 </html>

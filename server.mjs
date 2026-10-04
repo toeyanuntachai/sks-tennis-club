@@ -75,7 +75,9 @@ db.exec(`
     courts INTEGER NOT NULL CHECK(courts > 0),
     court_names TEXT NOT NULL,
     capacity INTEGER NOT NULL CHECK(capacity > 0),
-    cancelled INTEGER NOT NULL DEFAULT 0 CHECK(cancelled IN (0, 1))
+    cancelled INTEGER NOT NULL DEFAULT 0 CHECK(cancelled IN (0, 1)),
+    court_cost_satang INTEGER CHECK(court_cost_satang >= 0),
+    ball_cost_satang INTEGER CHECK(ball_cost_satang >= 0)
   );
   CREATE TABLE IF NOT EXISTS registrations (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +93,34 @@ db.exec(`
     PRIMARY KEY(event_id, member_id)
   );
 `);
+
+const paymentQrSchema = `CREATE TABLE IF NOT EXISTS event_payment_qr (
+  event_id TEXT PRIMARY KEY REFERENCES events(id),
+  image BLOB NOT NULL,
+  mime_type TEXT NOT NULL CHECK(mime_type IN ('image/png', 'image/jpeg'))
+);`;
+const costColumns = db.prepare('PRAGMA table_info(events)').all();
+if (!costColumns.some(column => column.name === 'court_cost_satang')) {
+  if (databasePath !== ':memory:') {
+    const backup = resolve(databasePath) + '.before-costs-' + Date.now() + '-' + randomUUID() + '.sqlite';
+    db.prepare('VACUUM INTO ?').run(backup);
+    console.log('SQLite backup created before cost migration: ' + backup);
+  }
+  atomic(() => {
+    const tables = ['members', 'sessions', 'events', 'registrations', 'event_payments'];
+    const counts = tables.map(table => [table, db.prepare('SELECT COUNT(*) AS n FROM ' + table).get().n]);
+    db.exec(`ALTER TABLE events ADD COLUMN court_cost_satang INTEGER CHECK(court_cost_satang >= 0);
+      ALTER TABLE events ADD COLUMN ball_cost_satang INTEGER CHECK(ball_cost_satang >= 0);`);
+    db.exec(paymentQrSchema);
+    if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Cost migration failed foreign key check');
+    for (const [table, count] of counts) {
+      if (db.prepare('SELECT COUNT(*) AS n FROM ' + table).get().n !== count) throw new Error('Cost migration changed row count: ' + table);
+    }
+    console.log('Cost migration validated; preserved rows: ' + JSON.stringify(Object.fromEntries(counts)));
+  });
+  console.log('Cost migration completed.');
+}
+db.exec(paymentQrSchema);
 
 const digest = value => createHash('sha256').update(value).digest('hex');
 function fail(status, message) { throw Object.assign(new Error(message), { status }); }
@@ -112,13 +142,13 @@ function currentMember(req) {
   return db.prepare(`SELECT m.id, m.nickname FROM sessions s JOIN members m ON m.id = s.member_id
     WHERE s.token_hash = ? AND s.expires > ? AND m.line_id IS NOT NULL`).get(digest(token), Date.now()) || null;
 }
-async function body(req) {
+async function body(req, limit = 16384) {
   if (!req.headers['content-type']?.startsWith('application/json')) fail(415, 'กรุณาส่งข้อมูลแบบ JSON');
   let bytes = 0;
   const chunks = [];
   for await (const chunk of req) {
     bytes += Buffer.byteLength(chunk);
-    if (bytes > 16384) fail(413, 'ข้อมูลยาวเกินไป');
+    if (bytes > limit) fail(413, 'ข้อมูลยาวเกินไป');
     chunks.push(Buffer.from(chunk));
   }
   try {
@@ -150,6 +180,40 @@ function eventFields(data) {
     courtNames: text(data.courtNames, 'รายละเอียดคอร์ต', 100), capacity: integer(data.capacity, 'จำนวนคนที่รับ')
   };
 }
+function paymentFields(data, previous = {}) {
+  const cost = (key, column) => {
+    const value = Object.hasOwn(data, key) ? data[key] : previous[column] ?? null;
+    if (value !== null && (!Number.isSafeInteger(value) || value < 0)) fail(400, 'ค่าใช้จ่ายต้องเป็นจำนวนเต็มหน่วยสตางค์และไม่ติดลบ');
+    return value;
+  };
+  const courtCostSatang = cost('courtCostSatang', 'court_cost_satang'), ballCostSatang = cost('ballCostSatang', 'ball_cost_satang');
+  // Leave room for rounding up at the maximum event size without losing integer precision.
+  if ((courtCostSatang ?? 0) + (ballCostSatang ?? 0) > Number.MAX_SAFE_INTEGER - 1000000) fail(400, 'ค่าใช้จ่ายสูงเกินไป');
+  let qr = undefined;
+  if (Object.hasOwn(data, 'paymentQr')) {
+    if (data.paymentQr === null) qr = null;
+    else {
+      if (typeof data.paymentQr !== 'string') fail(400, 'ข้อมูลรูป QR ไม่ถูกต้อง');
+      if (data.paymentQr.length > 2796204) fail(413, 'รูป QR ต้องไม่เกิน 2 MB');
+      const image = Buffer.from(data.paymentQr, 'base64');
+      if (image.length > 2 * 1024 * 1024) fail(413, 'รูป QR ต้องไม่เกิน 2 MB');
+      if (image.toString('base64') !== data.paymentQr) fail(400, 'ข้อมูลรูป QR ไม่ถูกต้อง');
+      const png = image.length >= 45 && image.subarray(0, 8).toString('hex') === '89504e470d0a1a0a'
+        && image.readUInt32BE(8) === 13 && image.subarray(12, 16).toString() === 'IHDR'
+        && image.readUInt32BE(16) > 0 && image.readUInt32BE(20) > 0
+        && image.subarray(-12).toString('hex') === '0000000049454e44ae426082';
+      const jpeg = image.length >= 4 && image.subarray(0, 3).toString('hex') === 'ffd8ff' && image.subarray(-2).toString('hex') === 'ffd9';
+      if (!png && !jpeg) fail(400, 'รูป QR ต้องเป็นไฟล์ PNG หรือ JPEG');
+      qr = { image, mimeType: png ? 'image/png' : 'image/jpeg' };
+    }
+  }
+  return { courtCostSatang, ballCostSatang, qr };
+}
+function savePaymentQr(id, qr) {
+  if (qr === null) db.prepare('DELETE FROM event_payment_qr WHERE event_id = ?').run(id);
+  else if (qr !== undefined) db.prepare(`INSERT INTO event_payment_qr VALUES (?, ?, ?)
+    ON CONFLICT(event_id) DO UPDATE SET image = excluded.image, mime_type = excluded.mime_type`).run(id, qr.image, qr.mimeType);
+}
 function eventRow(id) {
   const event = db.prepare(`SELECT e.*, m.nickname AS organizer_name,
     (SELECT COUNT(*) FROM registrations r WHERE r.event_id = e.id) AS total
@@ -169,7 +233,11 @@ function eventView(row, member) {
   };
 }
 function detail(id, member) {
-  const event = eventView(eventRow(id), member);
+  const row = eventRow(id), event = eventView(row, member);
+  const courtCostSatang = row.court_cost_satang, ballCostSatang = row.ball_cost_satang;
+  const totalCostSatang = courtCostSatang === null && ballCostSatang === null ? null : (courtCostSatang ?? 0) + (ballCostSatang ?? 0);
+  const divisor = BigInt(event.confirmed) * 100n;
+  const sharePerPersonSatang = totalCostSatang !== null && event.confirmed ? Number((BigInt(totalCostSatang) + divisor - 1n) / divisor) * 100 : null;
   const rows = db.prepare(`SELECT m.id, m.nickname, m.line_id IS NULL AS isGuest, COALESCE(p.paid, 0) AS paid FROM registrations r
     JOIN members m ON m.id = r.member_id
     LEFT JOIN event_payments p ON p.event_id = r.event_id AND p.member_id = r.member_id
@@ -181,6 +249,9 @@ function detail(id, member) {
     ) ORDER BY m.nickname, m.id`).all(id).map(p => ({ ...p, isGuest: Boolean(p.isGuest), paid: Boolean(p.paid) }));
   return {
     ...event,
+    courtCostSatang, ballCostSatang, totalCostSatang, sharePeople: event.confirmed, sharePerPersonSatang,
+    roundingSurplusSatang: sharePerPersonSatang === null ? null : sharePerPersonSatang * event.confirmed - totalCostSatang,
+    hasPaymentQr: Boolean(db.prepare('SELECT 1 FROM event_payment_qr WHERE event_id = ?').get(id)),
     participants: rows.slice(0, event.capacity),
     waitlist: rows.slice(event.capacity),
     withdrawn
@@ -287,16 +358,27 @@ export async function handleRequest(req, res) {
       return send(res, 200, { events: rows.map(row => eventView(row, member)) });
     }
     if (req.method === 'POST' && path === '/api/events') {
-      const fields = eventFields(await body(req)), id = randomUUID();
-      db.prepare(`INSERT INTO events(id, organizer_id, title, venue, date, start, end, courts, court_names, capacity)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, member.id, fields.title, fields.venue, fields.date, fields.start, fields.end, fields.courts, fields.courtNames, fields.capacity);
+      const data = await body(req, 3 * 1024 * 1024), fields = eventFields(data), payment = paymentFields(data), id = randomUUID();
+      atomic(() => {
+        db.prepare(`INSERT INTO events(id, organizer_id, title, venue, date, start, end, courts, court_names, capacity, court_cost_satang, ball_cost_satang)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, member.id, fields.title, fields.venue, fields.date, fields.start, fields.end, fields.courts, fields.courtNames, fields.capacity, payment.courtCostSatang, payment.ballCostSatang);
+        savePaymentQr(id, payment.qr);
+      });
       return send(res, 201, { event: detail(id, member) });
     }
-    const match = path.match(/^\/api\/events\/([^/]+)(?:\/(signup|cancel|payment|available-members|participants)(?:\/([^/]+))?)?$/);
+    const match = path.match(/^\/api\/events\/([^/]+)(?:\/(signup|cancel|payment|payment-qr|available-members|participants)(?:\/([^/]+))?)?$/);
     if (!match) fail(404, 'ไม่พบข้อมูลนี้');
     const [, id, action, participantId] = match;
     if (participantId && action !== 'participants') fail(404, 'ไม่พบข้อมูลนี้');
     if (req.method === 'GET' && !action) return send(res, 200, { event: detail(id, member) });
+    if (req.method === 'GET' && action === 'payment-qr') {
+      eventRow(id);
+      const qr = db.prepare('SELECT image, mime_type FROM event_payment_qr WHERE event_id = ?').get(id);
+      if (!qr) fail(404, 'นัดนี้ยังไม่มีรูป QR จ่ายเงิน');
+      res.writeHead(200, { 'Content-Type': qr.mime_type });
+      res.end(Buffer.from(qr.image));
+      return;
+    }
     if (action === 'available-members' || action === 'participants') {
       // Check authority again inside the write transaction before touching any roster data.
       const organizerEvent = () => {
@@ -372,14 +454,19 @@ export async function handleRequest(req, res) {
       return send(res, 200, { event: detail(id, member) });
     }
     if (req.method === 'PATCH' && !action) {
-      const fields = eventFields(await body(req));
+      const current = eventRow(id);
+      if (current.organizer_id !== member.id) fail(403, 'เฉพาะผู้สร้างนัดเท่านั้นที่แก้ไขได้');
+      if (current.cancelled) fail(409, 'นัดนี้ยกเลิกแล้ว');
+      const data = await body(req, 3 * 1024 * 1024), fields = eventFields(data);
       atomic(() => {
         const event = eventRow(id);
         if (event.organizer_id !== member.id) fail(403, 'เฉพาะผู้สร้างนัดเท่านั้นที่แก้ไขได้');
         if (event.cancelled) fail(409, 'นัดนี้ยกเลิกแล้ว');
         if (fields.capacity < Math.min(event.total, event.capacity)) fail(409, 'จำนวนที่รับต้องไม่น้อยกว่าคนที่ได้ที่แล้ว');
-        db.prepare('UPDATE events SET title=?, venue=?, date=?, start=?, end=?, courts=?, court_names=?, capacity=? WHERE id=?')
-          .run(fields.title, fields.venue, fields.date, fields.start, fields.end, fields.courts, fields.courtNames, fields.capacity, id);
+        const payment = paymentFields(data, event);
+        db.prepare('UPDATE events SET title=?, venue=?, date=?, start=?, end=?, courts=?, court_names=?, capacity=?, court_cost_satang=?, ball_cost_satang=? WHERE id=?')
+          .run(fields.title, fields.venue, fields.date, fields.start, fields.end, fields.courts, fields.courtNames, fields.capacity, payment.courtCostSatang, payment.ballCostSatang, id);
+        savePaymentQr(id, payment.qr);
       });
       return send(res, 200, { event: detail(id, member) });
     }
