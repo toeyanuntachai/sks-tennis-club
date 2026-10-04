@@ -5,6 +5,7 @@
   "type": "module",
   "engines": { "node": ">=22.13" },
   "scripts": {
+    "prebuild": "npm test",
     "build": "tailwindcss -i ./src/styles.css -o ./public/styles.css --minify",
     "start": "node --env-file-if-exists=.env server.mjs",
     "test": "node --test"

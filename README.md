@@ -69,7 +69,7 @@ node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'
 
 ## Deploy บน Railway
 
-ใช้ Node.js 24 ตาม `.node-version` และ `railway.json` ซึ่งทดสอบก่อน build Tailwind และตรวจหน้า `/` เมื่อเปิดบริการ
+ใช้ Node.js 24 ตาม `.node-version` Railway ตรวจคำสั่ง build/start จาก `package.json` โดย `prebuild` ทดสอบก่อน build Tailwind ตั้ง Healthcheck Path ของ service เป็น `/`
 
 1. สร้าง service จาก GitHub repository `toeyanuntachai/sks-tennis-club` บน branch `main`
 2. เพิ่ม Volume เชื่อมกับ service โดย mount ที่ `/data` และใช้ service เพียงหนึ่ง instance
@@ -80,7 +80,7 @@ node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'
 
 ก่อนตั้งค่า LINE ครบ เว็บจะแสดงหน้ารอเปิดใช้งาน ระบบ API รายชื่อยังต้องยืนยันตัวตน และจะไม่เปิดเผยข้อมูลให้ผู้เข้าชมทั่วไป
 
-อ้างอิง: [Railway config](https://docs.railway.com/config-as-code/reference), [Volumes](https://docs.railway.com/volumes), [สร้างโดเมน](https://docs.railway.com/networking/domains/working-with-domains)
+อ้างอิง: [Railpack Node.js](https://railpack.com/languages/node/), [Volumes](https://docs.railway.com/volumes), [สร้างโดเมน](https://docs.railway.com/networking/domains/working-with-domains)
 
 ## ตรวจสอบโค้ด
 
