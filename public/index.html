@@ -35,5 +35,14 @@
     <label class="label">คัดลอกข้อความไปส่งใน LINE<textarea id="share-text" readonly rows="7" class="field resize-none"></textarea></label>
     <form method="dialog" class="mt-5"><button class="btn">ปิด</button></form>
   </dialog>
+  <dialog id="participant-dialog" aria-labelledby="participant-title" class="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-line bg-surface p-6 text-navy">
+    <div id="participant-content"></div>
+  </dialog>
+  <dialog id="remove-participant-dialog" aria-labelledby="remove-title" class="m-auto w-[calc(100%-2rem)] max-w-md rounded-2xl border border-line bg-surface p-6 text-navy">
+    <h2 id="remove-title" class="mb-3 text-xl font-bold">ถอนชื่อ <span id="remove-name"></span>?</h2>
+    <p class="mb-5 text-muted">เก็บสถานะจ่ายเงินไว้ และเพิ่มกลับได้จากส่วนถอนชื่อแล้ว คนในคิวสำรองจะเลื่อนเข้าแทนตามลำดับ</p>
+    <p id="remove-participant-error" role="alert" class="mb-4 text-sm text-red-800"></p>
+    <div class="flex flex-wrap gap-3"><button id="remove-participant-confirm" class="btn btn-danger">ยืนยันถอนชื่อ</button><button data-dismiss-remove class="btn">กลับไปก่อน</button></div>
+  </dialog>
 </body>
 </html>

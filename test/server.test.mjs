@@ -105,7 +105,7 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   event=(await request('GET',path,alice.cookie)).data.event;
   assert.deepEqual(event.participants.map(p=>p.id),[alice.id]);
   assert.deepEqual(event.waitlist.map(p=>p.id),[cara.id]);
-  assert.deepEqual(event.withdrawn,[{id:bob.id,nickname:'เมย์',paid:true}]);
+  assert.deepEqual(event.withdrawn,[{id:bob.id,nickname:'เมย์',isGuest:false,paid:true}]);
   event=(await request('PATCH',payment,alice.cookie,{memberId:bob.id,paid:false})).data.event;
   assert.equal(event.withdrawn[0].paid,false);
   await request('PATCH',payment,alice.cookie,{memberId:bob.id,paid:true});
@@ -136,6 +136,109 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   event=(await request('GET',path,alice.cookie)).data.event;
   assert.equal(event.cancelled,true);
   assert.equal(event.confirmed+event.waiting,3);
+  // Organizer additions share the same FIFO and payment records as self signup.
+  const rosterId=(await request('POST','/api/events',alice.cookie,{...fields,capacity:2})).data.event.id;
+  const rosterPath='/api/events/'+rosterId, people=rosterPath+'/participants';
+  assert.equal((await request('GET',rosterPath+'/available-members',bob.cookie)).status,403);
+  const available=(await request('GET',rosterPath+'/available-members',alice.cookie)).data.members;
+  assert.equal(available.length,4);
+  assert.deepEqual(Object.keys(available[0]).sort(),['id','nickname']);
+  assert.equal((await request('POST',people,bob.cookie,{nickname:'เพื่อน'})).status,403);
+  assert.equal((await request('POST',people,'',{nickname:'เพื่อน'})).status,401);
+  assert.equal((await request('POST',people,alice.cookie,{nickname:'เพื่อน'},'https://other.example')).status,403);
+  for(const data of [{},{memberId:bob.id,nickname:'เพื่อน'},{nickname:' '},{nickname:'x'.repeat(41)},{memberId:'missing'}]) {
+    assert.equal((await request('POST',people,alice.cookie,data)).status,data.memberId==='missing'?404:400);
+  }
+  await request('POST',people,alice.cookie,{memberId:bob.id});
+  let roster=(await request('POST',people,alice.cookie,{nickname:'เพื่อนใหม่'})).data.event;
+  const guest=roster.participants[1];
+  assert.equal(guest.isGuest,true);assert.equal(guest.paid,false);
+  assert.equal(roster.participants[0].isGuest,false);
+  await request('POST',people,alice.cookie,{memberId:cara.id});
+  roster=(await request('POST',people,alice.cookie,{memberId:bob.id})).data.event;
+  assert.deepEqual(roster.participants.map(p=>p.id),[bob.id,guest.id]);
+  assert.deepEqual(roster.waitlist.map(p=>p.id),[cara.id]);
+  assert.equal((await request('GET',rosterPath+'/available-members',alice.cookie)).data.members.length,4);
+  assert.equal((await request('POST','/api/events/'+otherEvent.id+'/participants',bob.cookie,{memberId:guest.id})).status,404);
+  assert.equal((await request('PATCH',people+'/'+guest.id,bob.cookie,{nickname:'แอบแก้'})).status,403);
+  assert.equal((await request('PATCH',people+'/'+guest.id,bob.cookie,{memberId:dan.id})).status,403);
+  assert.equal((await request('DELETE',people+'/'+bob.id,cara.cookie,{})).status,403);
+  assert.equal((await request('PATCH',people+'/'+bob.id,alice.cookie,{nickname:'แก้สมาชิก'})).status,409);
+  assert.equal((await request('PATCH',people+'/'+guest.id,alice.cookie,{nickname:'แก้',memberId:dan.id})).status,400);
+  roster=(await request('PATCH',people+'/'+guest.id,alice.cookie,{nickname:'ชื่อที่แก้'})).data.event;
+  assert.equal(roster.participants[1].nickname,'ชื่อที่แก้');
+  assert.equal((await request('PATCH',people+'/'+guest.id,alice.cookie,{memberId:guest.id})).status,404);
+  assert.equal((await request('PATCH',people+'/'+guest.id,alice.cookie,{memberId:'missing'})).status,404);
+  assert.deepEqual((await request('GET',rosterPath,alice.cookie)).data.event.participants.map(p=>p.id),[bob.id,guest.id]);
+  await request('PATCH',rosterPath+'/payment',alice.cookie,{memberId:guest.id,paid:true});
+  roster=(await request('DELETE',people+'/'+guest.id,alice.cookie,{})).data.event;
+  assert.deepEqual(roster.participants.map(p=>p.id),[bob.id,cara.id]);
+  assert.equal(roster.withdrawn[0].paid,true);
+  roster=(await request('POST',people,alice.cookie,{memberId:guest.id})).data.event;
+  assert.deepEqual(roster.waitlist.map(p=>p.id),[guest.id]);
+  assert.equal(roster.waitlist[0].paid,true);
+  // Linking to a new account keeps the original position and transferred payment.
+  roster=(await request('PATCH',people+'/'+guest.id,alice.cookie,{memberId:dan.id})).data.event;
+  assert.deepEqual(roster.waitlist.map(p=>p.id),[dan.id]);
+  assert.equal(roster.waitlist[0].paid,true);assert.equal(roster.waitlist[0].isGuest,false);
+  assert.equal((await request('POST',people,alice.cookie,{memberId:guest.id})).status,404);
+  // Merge both orders: the earlier queue entry wins; either paid entry wins.
+  for(const guestFirst of [true,false]) {
+    const mergeId=(await request('POST','/api/events',alice.cookie,{...fields,capacity:2})).data.event.id;
+    const mergePath='/api/events/'+mergeId, mergePeople=mergePath+'/participants';
+    if(!guestFirst)await request('POST',mergePeople,alice.cookie,{memberId:bob.id});
+    let merged=(await request('POST',mergePeople,alice.cookie,{nickname:'เมย์'})).data.event;
+    const duplicate=merged.participants.find(p=>p.isGuest);
+    if(guestFirst)await request('POST',mergePeople,alice.cookie,{memberId:bob.id});
+    await request('POST',mergePeople,alice.cookie,{memberId:cara.id});
+    await request('PATCH',mergePath+'/payment',alice.cookie,{memberId:guestFirst?duplicate.id:bob.id,paid:true});
+    merged=(await request('PATCH',mergePeople+'/'+duplicate.id,alice.cookie,{memberId:bob.id})).data.event;
+    assert.deepEqual(merged.participants.map(p=>p.id),[bob.id,cara.id]);
+    assert.deepEqual(merged.waitlist,[]);assert.equal(merged.participants[0].paid,true);
+    // Same nickname never auto-links; both withdrawn entries remain withdrawn on merge.
+    merged=(await request('POST',mergePeople,alice.cookie,{nickname:'เมย์'})).data.event;
+    const withdrawnGuest=merged.waitlist[0];assert.equal(withdrawnGuest.isGuest,true);
+    await request('DELETE',mergePeople+'/'+withdrawnGuest.id,alice.cookie,{});
+    await request('DELETE',mergePeople+'/'+bob.id,alice.cookie,{});
+    merged=(await request('PATCH',mergePeople+'/'+withdrawnGuest.id,alice.cookie,{memberId:bob.id})).data.event;
+    assert.deepEqual(merged.participants.map(p=>p.id),[cara.id]);
+    assert.equal(merged.withdrawn.length,1);assert.equal(merged.withdrawn[0].id,bob.id);assert.equal(merged.withdrawn[0].paid,true);
+    merged=(await request('POST',mergePeople,alice.cookie,{memberId:bob.id})).data.event;
+    assert.deepEqual(merged.participants.map(p=>p.id),[cara.id,bob.id]);assert.equal(merged.participants[1].paid,true);
+  }
+  // Linking a withdrawn guest to an active account leaves the account's queue intact.
+  const oneId=(await request('POST','/api/events',alice.cookie,fields)).data.event.id;
+  const onePath='/api/events/'+oneId, onePeople=onePath+'/participants';
+  let one=(await request('POST',onePeople,alice.cookie,{nickname:'คนเดียว'})).data.event;
+  const inactiveGuest=one.participants[0];
+  await request('PATCH',onePath+'/payment',alice.cookie,{memberId:inactiveGuest.id,paid:true});
+  await request('DELETE',onePeople+'/'+inactiveGuest.id,alice.cookie,{});
+  await request('POST',onePeople,alice.cookie,{memberId:bob.id});
+  await request('POST',onePeople,alice.cookie,{memberId:cara.id});
+  one=(await request('PATCH',onePeople+'/'+inactiveGuest.id,alice.cookie,{memberId:bob.id})).data.event;
+  assert.deepEqual(one.participants.map(p=>p.id),[bob.id]);
+  assert.deepEqual(one.waitlist.map(p=>p.id),[cara.id]);assert.equal(one.participants[0].paid,true);
+  // A withdrawn guest linked to an account with no entry stays withdrawn too.
+  one=(await request('POST',onePeople,alice.cookie,{nickname:'ยังถอนอยู่'})).data.event;
+  const loneGuest=one.waitlist.find(p=>p.isGuest);
+  await request('DELETE',onePeople+'/'+loneGuest.id,alice.cookie,{});
+  one=(await request('PATCH',onePeople+'/'+loneGuest.id,alice.cookie,{memberId:dan.id})).data.event;
+  assert.deepEqual(one.participants.map(p=>p.id),[bob.id]);
+  assert.deepEqual(one.waitlist.map(p=>p.id),[cara.id]);
+  assert.deepEqual(one.withdrawn.map(p=>p.id),[dan.id]);assert.equal(one.withdrawn[0].paid,false);
+  const securityDb=new DatabaseSync(databasePath);
+  const guestEvent=(await request('POST',people,alice.cookie,{nickname:'ยังไม่มีบัญชี'})).data.event;
+  const anonymous=guestEvent.waitlist.find(p=>p.isGuest);
+  assert.equal(securityDb.prepare('SELECT line_id, guest_event_id FROM members WHERE id=?').get(anonymous.id).line_id,null);
+  const guestToken='g'.repeat(43);
+  const {createHash}=await import('node:crypto');
+  securityDb.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run(createHash('sha256').update(guestToken).digest('hex'),anonymous.id,Date.now()+60000);
+  assert.equal((await request('GET','/api/me','sks_session='+guestToken)).status,401);
+  securityDb.close();
+  await request('POST',rosterPath+'/cancel',alice.cookie,{});
+  for(const [method,url,data] of [['POST',people,{nickname:'ไม่ได้'}],['DELETE',people+'/'+anonymous.id,{}],['PATCH',people+'/'+anonymous.id,{nickname:'ไม่ได้'}],['PATCH',people+'/'+anonymous.id,{memberId:alice.id}],['POST',people,{memberId:bob.id}]]) {
+    assert.equal((await request(method,url,alice.cookie,data)).status,409);
+  }
   const shared=(await request('GET','/api/invite',alice.cookie)).data.url;
   assert.equal(new URL(shared).searchParams.get('invite'),invite);
   assert.equal((await request('GET','/api/invite')).status,401);

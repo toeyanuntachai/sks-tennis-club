@@ -19,14 +19,45 @@ const databasePath = process.env.SKS_DATABASE_PATH || resolve(root, 'data/sks.sq
 if (databasePath !== ':memory:') mkdirSync(dirname(resolve(databasePath)), { recursive: true });
 // ponytail: synchronous SQLite suits this one small group; move to a shared database before running multiple app servers.
 const db = new DatabaseSync(databasePath);
+db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
+const memberColumns = db.prepare('PRAGMA table_info(members)').all();
+if (memberColumns.some(column => column.name === 'line_id' && column.notnull)) {
+  // VACUUM includes committed WAL data in a consistent backup before changing the schema.
+  if (databasePath !== ':memory:') {
+    const backup = resolve(databasePath) + '.before-guests-' + Date.now() + '-' + randomUUID() + '.sqlite';
+    db.prepare('VACUUM INTO ?').run(backup);
+    console.log('SQLite backup created before guest migration: ' + backup);
+  }
+  db.exec('PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;');
+  try {
+    const counts = ['members', 'sessions', 'events', 'registrations', 'event_payments']
+      .filter(table => db.prepare('SELECT 1 FROM sqlite_master WHERE type = ? AND name = ?').get('table', table))
+      .map(table => [table, db.prepare('SELECT COUNT(*) AS n FROM ' + table).get().n]);
+    db.exec(`CREATE TABLE members_new (
+      id TEXT PRIMARY KEY, line_id TEXT UNIQUE, nickname TEXT,
+      guest_event_id TEXT REFERENCES events(id)
+    );
+    INSERT INTO members_new(id, line_id, nickname) SELECT id, line_id, nickname FROM members;
+    DROP TABLE members;
+    ALTER TABLE members_new RENAME TO members;`);
+    if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Guest migration failed foreign key check');
+    for (const [table, count] of counts) {
+      if (db.prepare('SELECT COUNT(*) AS n FROM ' + table).get().n !== count) throw new Error('Guest migration changed row count: ' + table);
+    }
+    db.exec('COMMIT');
+    console.log('Guest member migration completed; foreign keys valid; preserved rows: ' + JSON.stringify(Object.fromEntries(counts)));
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
+  finally { db.exec('PRAGMA foreign_keys = ON'); }
+}
 db.exec(`
   PRAGMA foreign_keys = ON;
   PRAGMA journal_mode = WAL;
   PRAGMA busy_timeout = 5000;
   CREATE TABLE IF NOT EXISTS members (
     id TEXT PRIMARY KEY,
-    line_id TEXT NOT NULL UNIQUE,
-    nickname TEXT
+    line_id TEXT UNIQUE,
+    nickname TEXT,
+    guest_event_id TEXT REFERENCES events(id)
   );
   CREATE TABLE IF NOT EXISTS sessions (
     token_hash TEXT PRIMARY KEY,
@@ -79,7 +110,7 @@ function currentMember(req) {
   const token = req.headers.cookie?.match(/(?:^|;\s*)sks_session=([A-Za-z0-9_-]{43})(?:;|$)/)?.[1];
   if (!token) return null;
   return db.prepare(`SELECT m.id, m.nickname FROM sessions s JOIN members m ON m.id = s.member_id
-    WHERE s.token_hash = ? AND s.expires > ?`).get(digest(token), Date.now()) || null;
+    WHERE s.token_hash = ? AND s.expires > ? AND m.line_id IS NOT NULL`).get(digest(token), Date.now()) || null;
 }
 async function body(req) {
   if (!req.headers['content-type']?.startsWith('application/json')) fail(415, 'กรุณาส่งข้อมูลแบบ JSON');
@@ -139,15 +170,15 @@ function eventView(row, member) {
 }
 function detail(id, member) {
   const event = eventView(eventRow(id), member);
-  const rows = db.prepare(`SELECT m.id, m.nickname, COALESCE(p.paid, 0) AS paid FROM registrations r
+  const rows = db.prepare(`SELECT m.id, m.nickname, m.line_id IS NULL AS isGuest, COALESCE(p.paid, 0) AS paid FROM registrations r
     JOIN members m ON m.id = r.member_id
     LEFT JOIN event_payments p ON p.event_id = r.event_id AND p.member_id = r.member_id
-    WHERE r.event_id = ? ORDER BY r.sequence`).all(id).map(p => ({ ...p, paid: Boolean(p.paid) }));
-  const withdrawn = db.prepare(`SELECT m.id, m.nickname, p.paid FROM event_payments p
+    WHERE r.event_id = ? ORDER BY r.sequence`).all(id).map(p => ({ ...p, isGuest: Boolean(p.isGuest), paid: Boolean(p.paid) }));
+  const withdrawn = db.prepare(`SELECT m.id, m.nickname, m.line_id IS NULL AS isGuest, p.paid FROM event_payments p
     JOIN members m ON m.id = p.member_id
     WHERE p.event_id = ? AND NOT EXISTS (
       SELECT 1 FROM registrations r WHERE r.event_id = p.event_id AND r.member_id = p.member_id
-    ) ORDER BY m.nickname, m.id`).all(id).map(p => ({ ...p, paid: Boolean(p.paid) }));
+    ) ORDER BY m.nickname, m.id`).all(id).map(p => ({ ...p, isGuest: Boolean(p.isGuest), paid: Boolean(p.paid) }));
   return {
     ...event,
     participants: rows.slice(0, event.capacity),
@@ -261,10 +292,69 @@ export async function handleRequest(req, res) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, member.id, fields.title, fields.venue, fields.date, fields.start, fields.end, fields.courts, fields.courtNames, fields.capacity);
       return send(res, 201, { event: detail(id, member) });
     }
-    const match = path.match(/^\/api\/events\/([^/]+)(?:\/(signup|cancel|payment))?$/);
+    const match = path.match(/^\/api\/events\/([^/]+)(?:\/(signup|cancel|payment|available-members|participants)(?:\/([^/]+))?)?$/);
     if (!match) fail(404, 'ไม่พบข้อมูลนี้');
-    const [, id, action] = match;
+    const [, id, action, participantId] = match;
+    if (participantId && action !== 'participants') fail(404, 'ไม่พบข้อมูลนี้');
     if (req.method === 'GET' && !action) return send(res, 200, { event: detail(id, member) });
+    if (action === 'available-members' || action === 'participants') {
+      // Check authority again inside the write transaction before touching any roster data.
+      const organizerEvent = () => {
+        const event = eventRow(id);
+        if (event.organizer_id !== member.id) fail(403, 'เฉพาะผู้สร้างนัดเท่านั้นที่จัดการรายชื่อคนอื่นได้');
+        if (event.cancelled) fail(409, 'นัดนี้ยกเลิกแล้ว');
+      };
+      if (req.method === 'GET' && action === 'available-members') {
+        organizerEvent();
+        return send(res, 200, { members: db.prepare('SELECT id, nickname FROM members WHERE line_id IS NOT NULL AND nickname IS NOT NULL ORDER BY nickname, id').all() });
+      }
+      const data = await body(req);
+      atomic(() => {
+        organizerEvent();
+        if (req.method === 'POST' && !participantId && action === 'participants') {
+          if (Object.hasOwn(data, 'memberId') === Object.hasOwn(data, 'nickname')) fail(400, 'เลือกสมาชิกหรือพิมพ์ชื่ออย่างใดอย่างหนึ่ง');
+          let memberId;
+          if (Object.hasOwn(data, 'nickname')) {
+            const nickname = text(data.nickname, 'ชื่อเล่น', 40);
+            memberId = randomUUID();
+            db.prepare('INSERT INTO members(id, nickname, guest_event_id) VALUES (?, ?, ?)').run(memberId, nickname, id);
+          } else {
+            memberId = text(data.memberId, 'สมาชิก', 64);
+            const target = db.prepare('SELECT line_id, nickname, guest_event_id FROM members WHERE id = ?').get(memberId);
+            if (!target?.nickname || (target.line_id === null && target.guest_event_id !== id)) fail(404, 'ไม่พบสมาชิกที่เพิ่มในนัดนี้ได้');
+          }
+          db.prepare('INSERT INTO registrations(event_id, member_id) VALUES (?, ?) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, memberId);
+          db.prepare('INSERT INTO event_payments VALUES (?, ?, 0) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, memberId);
+        } else if (participantId && action === 'participants' && ['DELETE', 'PATCH'].includes(req.method)) {
+          const target = db.prepare(`SELECT m.* FROM members m WHERE m.id = ? AND (
+            EXISTS(SELECT 1 FROM registrations WHERE event_id = ? AND member_id = m.id)
+            OR EXISTS(SELECT 1 FROM event_payments WHERE event_id = ? AND member_id = m.id))`).get(participantId, id, id);
+          if (!target) fail(404, 'ไม่พบสมาชิกในรายชื่อนัดนี้');
+          if (req.method === 'DELETE') {
+            db.prepare('INSERT INTO event_payments VALUES (?, ?, 0) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, participantId);
+            db.prepare('DELETE FROM registrations WHERE event_id = ? AND member_id = ?').run(id, participantId);
+          } else {
+            if (target.line_id !== null || target.guest_event_id !== id) fail(409, 'แก้ชื่อหรือผูกบัญชีได้เฉพาะชื่อที่ผู้จัดเพิ่ม');
+            if (Object.hasOwn(data, 'memberId') === Object.hasOwn(data, 'nickname')) fail(400, 'แก้ชื่อหรือผูกบัญชีอย่างใดอย่างหนึ่ง');
+            if (Object.hasOwn(data, 'nickname')) {
+              db.prepare('UPDATE members SET nickname = ? WHERE id = ?').run(text(data.nickname, 'ชื่อเล่น', 40), participantId);
+            } else {
+              const memberId = text(data.memberId, 'สมาชิก', 64);
+              if (!db.prepare('SELECT 1 FROM members WHERE id = ? AND line_id IS NOT NULL AND nickname IS NOT NULL').get(memberId)) fail(404, 'ไม่พบบัญชีสมาชิกที่เลือก');
+              const registrations = db.prepare('SELECT sequence, member_id FROM registrations WHERE event_id = ? AND member_id IN (?, ?) ORDER BY sequence').all(id, participantId, memberId);
+              if (registrations.length === 2) db.prepare('DELETE FROM registrations WHERE sequence = ?').run(registrations[1].sequence);
+              if (registrations[0]) db.prepare('UPDATE registrations SET member_id = ? WHERE sequence = ?').run(memberId, registrations[0].sequence);
+              const payments = db.prepare('SELECT paid FROM event_payments WHERE event_id = ? AND member_id IN (?, ?)').all(id, participantId, memberId);
+              db.prepare('DELETE FROM event_payments WHERE event_id = ? AND member_id = ?').run(id, participantId);
+              db.prepare(`INSERT INTO event_payments VALUES (?, ?, ?)
+                ON CONFLICT(event_id, member_id) DO UPDATE SET paid = excluded.paid`).run(id, memberId, Number(payments.some(p => p.paid)));
+              db.prepare('DELETE FROM members WHERE id = ? AND line_id IS NULL AND guest_event_id = ?').run(participantId, id);
+            }
+          }
+        } else fail(404, 'ไม่พบข้อมูลนี้');
+      });
+      return send(res, 200, { event: detail(id, member) });
+    }
     if (req.method === 'PATCH' && action === 'payment') {
       const data = await body(req);
       const memberId = text(data.memberId, 'สมาชิก', 64);

@@ -40,11 +40,69 @@ test('existing members open the shared event after LIFF finishes redirect initia
   assert.deepEqual(calls,['/api/config','init','/api/me','/api/events/event-1']);
   assert.match(nodes.app.innerHTML,/นัดที่แชร์/);
   assert.match(nodes.app.innerHTML,/ถอนชื่อของฉัน/);
-  assert.doesNotMatch(nodes.app.innerHTML,/data-edit|data-cancel|data-payment|<img src=x/);
+  assert.doesNotMatch(nodes.app.innerHTML,/data-edit|data-cancel|data-payment|data-add-participant|data-remove-participant|data-link-participant|<img src=x/);
   assert.match(nodes.app.innerHTML,/จ่ายแล้ว/);
   assert.match(nodes.app.innerHTML,/&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.equal(location.searchParams.get('event'),'event-1');
   assert.equal(location.searchParams.has('invite'),false);
+});
+
+test('organizer forms add names, retain input after save failure, and expose restore and link actions', async () => {
+  const nodes=Object.fromEntries(['app','account','toast','confirm-dialog','share-dialog','dismiss-cancel','confirm-cancel','participant-dialog','participant-content','participant-error','remove-name','remove-participant-dialog','remove-participant-error','remove-participant-confirm'].map(id=>[id,{
+    innerHTML:'',open:false,dataset:{},setAttribute(){},classList:{add(){},remove(){}},focus(){},showModal(){this.open=true;},close(){this.open=false;}
+  }]));
+  const handlers={}, requests=[], location=new URL('https://club.example/?event=e');
+  const member={id:'owner',nickname:'ผู้จัด'};
+  const guest={id:'guest',nickname:'เพื่อน <ใหม่>',isGuest:true,paid:true};
+  const event={id:'e',title:'นัด',venue:'สนาม',date:'2026-10-10',start:'18:00',end:'20:00',courts:2,courtNames:'1,2',capacity:1,cancelled:false,organizerName:'ผู้จัด',confirmed:1,waiting:0,myPosition:null,isOrganizer:true,participants:[guest],waitlist:[],withdrawn:[{id:'withdrawn',nickname:'ถอน',isGuest:false,paid:true}]};
+  let failSave=true;
+  const context={
+    URL,URLSearchParams,Intl,Date,setTimeout(){},clearTimeout(){},setInterval(){},location,window:{scrollTo(){}},
+    FormData:class {constructor(form){this.fields=form.fields;}[Symbol.iterator](){return Object.entries(this.fields)[Symbol.iterator]();}},
+    document:{getElementById(id){return nodes[id]||null;},querySelectorAll(){return [];},addEventListener(type,fn){handlers[type]=fn;},activeElement:null},
+    history:{replaceState(_state,_title,url){location.href=url.href;}},
+    async fetch(path,options) {
+      if(path==='/api/config')return Response.json({ready:false});
+      if(path==='/api/me')return Response.json({member});
+      if(path==='/api/events/e')return Response.json({event});
+      if(path==='/api/events/e/available-members')return Response.json({members:[{id:'registered',nickname:'สมาชิก <หนึ่ง>'}]});
+      requests.push({path,method:options.method,data:JSON.parse(options.body)});
+      if(failSave)return Response.json({message:'บันทึกไม่สำเร็จ'}, {status:500});
+      return Response.json({event});
+    }
+  };
+  await runInNewContext(readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context);
+  const click=(attribute,dataset={},id='')=>handlers.click({target:{closest(){return {id,dataset,hasAttribute(name){return name===attribute;}};}}});
+  assert.match(nodes.app.innerHTML,/เพิ่มโดยผู้จัด/);
+  assert.match(nodes.app.innerHTML,/data-restore-participant="withdrawn"/);
+  await click('data-add-participant');
+  assert.equal(nodes['participant-dialog'].open,true);
+  assert.match(nodes['participant-content'].innerHTML,/สมาชิก &lt;หนึ่ง&gt;/);
+  handlers.change({target:{id:'participant-mode',value:'name'}});
+  assert.match(nodes['participant-content'].innerHTML,/name="nickname"/);
+  const submit=()=>handlers.submit({target:{id:'participant-form',fields:{nickname:'เพื่อนใหม่'}},preventDefault(){}});
+  await submit();
+  assert.equal(nodes['participant-dialog'].open,true);
+  assert.equal(nodes.toast.textContent,'บันทึกไม่สำเร็จ');
+  assert.equal(nodes['participant-error'].textContent,'บันทึกไม่สำเร็จ');
+  assert.match(nodes['participant-content'].innerHTML,/name="nickname"/);
+  failSave=false;await submit();
+  assert.equal(nodes['participant-dialog'].open,false);
+  assert.deepEqual(requests.at(-1),{path:'/api/events/e/participants',method:'POST',data:{nickname:'เพื่อนใหม่'}});
+  await click('',{linkParticipant:'guest'});
+  assert.match(nodes['participant-content'].innerHTML,/ผูกบัญชีให้ เพื่อน &lt;ใหม่&gt;/);
+  assert.match(nodes['participant-content'].innerHTML,/ใช้คิวที่ลงก่อน/);
+  await handlers.submit({target:{id:'participant-form',fields:{memberId:'registered'}},preventDefault(){}});
+  assert.deepEqual(requests.at(-1),{path:'/api/events/e/participants/guest',method:'PATCH',data:{memberId:'registered'}});
+  await click('',{restoreParticipant:'withdrawn'});
+  assert.deepEqual(requests.at(-1),{path:'/api/events/e/participants',method:'POST',data:{memberId:'withdrawn'}});
+  await click('',{removeParticipant:'guest'});
+  assert.equal(nodes['remove-name'].textContent,guest.nickname);
+  assert.equal(nodes['remove-participant-dialog'].open,true);
+  await click('',nodes['remove-participant-confirm'].dataset,'remove-participant-confirm');
+  assert.deepEqual(requests.at(-1),{path:'/api/events/e/participants/guest',method:'DELETE',data:{}});
+  event.cancelled=true;await runInNewContext('refresh()',context);
+  assert.doesNotMatch(nodes.app.innerHTML,/data-add-participant|data-restore-participant|data-remove-participant|data-link-participant/);
 });
 
 test('organizers mark payments, retain withdrawn names, and recover the checkbox after a failed save', async () => {

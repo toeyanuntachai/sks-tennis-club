@@ -2,6 +2,7 @@ const app = document.getElementById('app'), account = document.getElementById('a
 const params = new URLSearchParams(location.search);
 let invite = params.get('invite') || '', requestedEvent = params.get('event');
 let config, member = null, events = [], selected = null, screen = 'welcome', busy = false, toastTimer, suggestedNickname = '', liffReady;
+let participantForm = null;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const dateLabel = value => new Intl.DateTimeFormat('th-TH', { weekday:'short', day:'numeric', month:'short' }).format(new Date(value + 'T12:00:00'));
 const today = () => {
@@ -28,11 +29,11 @@ async function run(work) {
   if (busy) return;
   busy = true;
   app.setAttribute('aria-busy', 'true');
-  const controls = [...document.querySelectorAll('button,input')].map(el => ({el, disabled:el.disabled}));
+  const controls = [...document.querySelectorAll('button,input,select')].map(el => ({el, disabled:el.disabled}));
   controls.forEach(({el}) => el.disabled = true);
   try { await work(); }
   catch (error) {
-    if (error.status === 401 || !member) {member = null; screen = 'welcome'; render();}
+    if (error.status === 401 || !member) {document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());member = null; screen = 'welcome'; render();}
     notify(error.message);
   } finally {
     controls.forEach(({el, disabled}) => el.disabled = disabled);
@@ -69,9 +70,11 @@ function renderList() {
     (active.length?'<section class="panel py-0">'+rows(active)+'</section>':'<section class="panel py-12 text-center"><h2 class="mb-2 text-lg font-bold">ยังไม่มีนัดที่เปิดอยู่</h2><p class="text-muted">จองคอร์ตแล้วกด “เปิดนัด” เพื่อชวนเพื่อนลงชื่อได้เลย</p></section>')+
     (cancelled.length?'<details class="mt-6"><summary class="cursor-pointer text-sm text-muted">นัดที่ยกเลิก · '+cancelled.length+' นัด</summary><section class="panel mt-3 py-0">'+rows(cancelled)+'</section></details>':'');
 }
-function roster(people, waiting = false, editable = false) {
-  return people.length?'<ol class="divide-y divide-line">'+people.map((p,i)=>'<li class="flex items-center gap-3 py-3"><span class="grid size-9 shrink-0 place-items-center rounded-full bg-sage text-sm">'+(waiting?i+1:esc(p.nickname?.slice(0,1)))+'</span><span class="min-w-0 flex-1 break-words">'+esc(p.nickname)+(p.id===member.id?'<small class="ml-2 text-leaf">คุณ</small>':'')+'</span>'+
-    (editable?'<label class="flex min-h-11 shrink-0 cursor-pointer items-center gap-2 text-sm"><input id="payment-'+esc(p.id)+'" type="checkbox" data-payment="'+esc(p.id)+'" aria-label="จ่ายแล้ว: '+esc(p.nickname)+'" class="size-5 accent-leaf" '+(p.paid?'checked':'')+'><span>'+(p.paid?'จ่ายแล้ว':'ยังไม่จ่าย')+'</span></label>':'<span class="shrink-0 text-sm '+(p.paid?'font-semibold text-leaf':'text-muted')+'">'+(p.paid?'จ่ายแล้ว':'ยังไม่จ่าย')+'</span>')+'</li>').join('')+'</ol>':'<p class="py-3 text-muted">ยังไม่มีรายชื่อ</p>';
+function roster(people, waiting = false, editable = false, withdrawn = false) {
+  const action = (p, name, label) => '<button data-'+name+'="'+esc(p.id)+'" aria-label="'+label+': '+esc(p.nickname)+'" class="min-h-11 text-sm underline underline-offset-4">'+label+'</button>';
+  return people.length?'<ol class="divide-y divide-line">'+people.map((p,i)=>'<li class="py-3"><div class="flex items-center gap-3"><span class="grid size-9 shrink-0 place-items-center rounded-full bg-sage text-sm">'+(waiting?i+1:esc(p.nickname?.slice(0,1)))+'</span><span class="min-w-0 flex-1 break-words">'+esc(p.nickname)+(p.id===member.id?'<small class="ml-2 text-leaf">คุณ</small>':'')+(p.isGuest?'<small class="mt-1 block text-xs text-muted">เพิ่มโดยผู้จัด</small>':'')+'</span>'+
+    (editable?'<label class="flex min-h-11 shrink-0 cursor-pointer items-center gap-2 text-sm"><input id="payment-'+esc(p.id)+'" type="checkbox" data-payment="'+esc(p.id)+'" aria-label="จ่ายแล้ว: '+esc(p.nickname)+'" class="size-5 accent-leaf" '+(p.paid?'checked':'')+'><span>'+(p.paid?'จ่ายแล้ว':'ยังไม่จ่าย')+'</span></label>':'<span class="shrink-0 text-sm '+(p.paid?'font-semibold text-leaf':'text-muted')+'">'+(p.paid?'จ่ายแล้ว':'ยังไม่จ่าย')+'</span>')+'</div>'+
+    (editable?'<div class="ml-12 flex flex-wrap gap-x-4">'+(withdrawn?action(p,'restore-participant','เพิ่มกลับ'):action(p,'remove-participant','ถอนชื่อ'))+(p.isGuest?action(p,'rename-participant','แก้ชื่อ')+action(p,'link-participant','ผูกบัญชี'):'')+'</div>':'')+'</li>').join('')+'</ol>':'<p class="py-3 text-muted">ยังไม่มีรายชื่อ</p>';
 }
 function renderDetail(e) {
   const editablePayments = e.isOrganizer && !e.cancelled;
@@ -81,9 +84,9 @@ function renderDetail(e) {
     '<div class="mb-5 grid gap-5 md:grid-cols-[1.4fr_1fr]"><section class="panel">'+badge(e)+'<h1 id="page-title" tabindex="-1" class="my-4 text-3xl font-bold">'+esc(e.title)+'</h1><p>'+esc(e.venue)+'</p><dl class="mt-6 grid grid-cols-2 gap-5">'+fact('วันตี',dateLabel(e.date))+fact('เวลา',e.start+'–'+e.end)+fact('คอร์ตที่จอง',e.courtNames)+fact('ผู้จัดนัด',e.organizerName)+'</dl></section>'+
     '<aside class="panel flex flex-col justify-center bg-sage"><p class="text-xs font-semibold tracking-wide text-leaf">ลงชื่อทั้งนัด</p><p class="my-3 text-5xl font-bold">'+e.confirmed+' <span class="text-xl font-normal">/ '+e.capacity+' คน</span></p><p>คิวสำรอง '+e.waiting+' คน</p><p class="mt-3 font-semibold">'+status+'</p></aside></div>'+
     (e.cancelled?'<p class="mb-5 rounded-xl bg-sage p-4">นัดนี้ยกเลิกแล้ว รายชื่อด้านล่างเป็นประวัติของนัด</p>':'<div class="mb-5 flex flex-wrap gap-3"><button id="signup-button" data-signup class="btn '+(e.myPosition?'btn-danger':'btn-primary')+' flex-1">'+(e.myPosition?'ถอนชื่อของฉัน':e.confirmed>=e.capacity?'เข้าคิวสำรอง':'ลงชื่อนัดนี้')+'</button><button id="share-button" data-share class="btn">แชร์นัดใน LINE</button></div>')+
-    '<p class="mb-3 text-sm text-muted">สถานะจ่ายเงินบันทึกโดยผู้เปิดนัด'+(editablePayments?' · ติ๊กเมื่อได้รับเงินแล้ว':'')+'</p>'+
+    '<div class="mb-3 flex flex-wrap items-center justify-between gap-3"><p class="text-sm text-muted">สถานะจ่ายเงินบันทึกโดยผู้เปิดนัด'+(editablePayments?' · ติ๊กเมื่อได้รับเงินแล้ว':'')+'</p>'+(editablePayments?'<button data-add-participant class="btn">+ เพิ่มรายชื่อ</button>':'')+'</div>'+
     '<div class="grid gap-5 md:grid-cols-2"><section class="panel"><h2 class="mb-3 text-xl font-bold">ผู้เข้าร่วม · '+e.confirmed+' คน</h2>'+roster(e.participants,false,editablePayments)+'</section><section class="panel"><h2 class="mb-3 text-xl font-bold">คิวสำรอง · '+e.waiting+' คน</h2><p class="mb-2 text-sm text-muted">เรียงตามลำดับลงชื่อ คนแรกได้เลื่อนเข้าแทนเมื่อมีคนถอน</p>'+roster(e.waitlist,true,editablePayments)+'</section></div>'+
-    (e.withdrawn?.length?'<section class="panel mt-5"><h2 class="mb-2 text-xl font-bold">ถอนชื่อแล้ว · '+e.withdrawn.length+' คน</h2><p class="mb-2 text-sm text-muted">เก็บสถานะจ่ายไว้ให้ผู้จัดตรวจสอบ ไม่นับเป็นผู้เข้าร่วมหรือคิวสำรอง</p>'+roster(e.withdrawn,false,editablePayments)+'</section>':'')+
+    (e.withdrawn?.length?'<section class="panel mt-5"><h2 class="mb-2 text-xl font-bold">ถอนชื่อแล้ว · '+e.withdrawn.length+' คน</h2><p class="mb-2 text-sm text-muted">เก็บสถานะจ่ายไว้ให้ผู้จัดตรวจสอบ ไม่นับเป็นผู้เข้าร่วมหรือคิวสำรอง</p>'+roster(e.withdrawn,false,editablePayments,true)+'</section>':'')+
     (e.isOrganizer&&!e.cancelled?'<div class="mt-6 flex gap-3"><button id="edit-button" data-edit class="btn">แก้ไขนัด</button><button id="cancel-button" data-cancel class="btn btn-danger">ยกเลิกนัด</button></div>':'');
 }
 function renderForm() {
@@ -163,6 +166,24 @@ async function share() {
   try {await navigator.clipboard.writeText(text);notify('คัดลอกข้อความแล้ว นำไปส่งในกลุ่ม LINE ได้เลย');}
   catch {document.getElementById('share-text').value=text;document.getElementById('share-dialog').showModal();document.getElementById('share-text').select();}
 }
+function participant(id) {
+  return [...selected.participants, ...selected.waitlist, ...selected.withdrawn].find(p => p.id === id);
+}
+function renderParticipantForm() {
+  const {mode, person, members} = participantForm;
+  const linking = mode === 'link', renaming = mode === 'rename', typing = mode === 'name' || renaming;
+  document.getElementById('participant-content').innerHTML = '<h2 id="participant-title" class="mb-4 text-xl font-bold">'+(linking?'ผูกบัญชีให้ '+esc(person.nickname):renaming?'แก้ชื่อที่เพิ่ม': 'เพิ่มรายชื่อ')+'</h2>'+
+    '<form id="participant-form">'+(!linking&&!renaming?'<label class="label mb-4">วิธีเพิ่ม<select id="participant-mode" class="field"><option value="member" '+(!typing?'selected':'')+'>เลือกสมาชิกที่มีบัญชี</option><option value="name" '+(typing?'selected':'')+'>พิมพ์ชื่อคนที่ยังไม่มีบัญชี</option></select></label>':'')+
+    (typing?'<label class="label">ชื่อเล่น<input name="nickname" class="field" maxlength="40" required value="'+esc(person?.nickname||'')+'" autocomplete="off"></label>':'<label class="label">สมาชิก<select name="memberId" class="field" required><option value="">เลือกสมาชิก</option>'+members.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.nickname)+'</option>').join('')+'</select></label>')+
+    '<p class="mt-4 text-sm text-muted">'+(linking?'เลือกบัญชีของเจ้าของชื่อนี้ หากลงชื่อซ้ำจะรวมเป็นคนเดียว ใช้คิวที่ลงก่อนและเก็บสถานะจ่ายแล้วจากทั้งสองรายการ':renaming?'เปลี่ยนเฉพาะชื่อในนัดนี้':'ต่อท้ายคิวตามลำดับ เมื่อเต็มจะเข้าคิวสำรอง')+'</p>'+
+    '<p id="participant-error" role="alert" class="mt-4 text-sm text-red-800"></p><div class="mt-5 flex flex-wrap gap-3"><button type="submit" class="btn btn-primary">'+(linking?'ยืนยันผูกบัญชี':renaming?'บันทึกชื่อ':'เพิ่มรายชื่อ')+'</button><button type="button" data-close-participant class="btn">กลับไปก่อน</button></div></form>';
+}
+async function openParticipantForm(mode, id) {
+  const members = mode === 'rename' ? [] : (await api('/events/'+encodeURIComponent(selected.id)+'/available-members')).members;
+  participantForm = {mode, person:id?participant(id):null, members};
+  renderParticipantForm();
+  document.getElementById('participant-dialog').showModal();
+}
 document.addEventListener('click',event=>{
   const button = event.target.closest('button'); if(!button || button.disabled) return;
   if(button.hasAttribute('data-login'))return run(enter);
@@ -176,6 +197,28 @@ document.addEventListener('click',event=>{
   if(button.hasAttribute('data-logout'))return run(async()=>{await api('/logout','POST',{});member=null;selected=null;events=[];move('welcome');});
   if(button.hasAttribute('data-share'))return run(share);
   if(button.hasAttribute('data-cancel'))return document.getElementById('confirm-dialog').showModal();
+  if(button.hasAttribute('data-add-participant'))return run(()=>openParticipantForm('member'));
+  if(button.dataset.renameParticipant)return run(()=>openParticipantForm('rename',button.dataset.renameParticipant));
+  if(button.dataset.linkParticipant)return run(()=>openParticipantForm('link',button.dataset.linkParticipant));
+  if(button.hasAttribute('data-close-participant'))return document.getElementById('participant-dialog').close();
+  if(button.dataset.restoreParticipant)return run(async()=>{
+    selected=(await api('/events/'+encodeURIComponent(selected.id)+'/participants','POST',{memberId:button.dataset.restoreParticipant})).event;
+    render();notify('เพิ่มกลับแล้ว · เก็บสถานะจ่ายเดิม');
+  });
+  if(button.dataset.removeParticipant){
+    const person=participant(button.dataset.removeParticipant);
+    document.getElementById('remove-name').textContent=person.nickname;
+    document.getElementById('remove-participant-error').textContent='';
+    document.getElementById('remove-participant-confirm').dataset.memberId=person.id;
+    return document.getElementById('remove-participant-dialog').showModal();
+  }
+  if(button.hasAttribute('data-dismiss-remove'))return document.getElementById('remove-participant-dialog').close();
+  if(button.id==='remove-participant-confirm')return run(async()=>{
+    try {
+      selected=(await api('/events/'+encodeURIComponent(selected.id)+'/participants/'+encodeURIComponent(button.dataset.memberId),'DELETE',{})).event;
+      document.getElementById('remove-participant-dialog').close();render();notify('ถอนชื่อแล้ว · เก็บสถานะจ่ายเดิม');
+    } catch(error) {document.getElementById('remove-participant-error').textContent=error.message;throw error;}
+  });
   if(button.hasAttribute('data-signup'))return run(async()=>{
     const withdrawing = Boolean(selected.myPosition), previous = selected;
     selected = (await api('/events/'+encodeURIComponent(selected.id)+'/signup',withdrawing?'DELETE':'POST',{})).event;
@@ -185,6 +228,17 @@ document.addEventListener('click',event=>{
   });
 });
 document.addEventListener('submit',event=>{
+  if(event.target.id==='participant-form'){
+    event.preventDefault();
+    const {mode,person}=participantForm;
+    const fields=Object.fromEntries(new FormData(event.target));
+    return run(async()=>{
+      try {
+        selected=(await api('/events/'+encodeURIComponent(selected.id)+'/participants'+(person?'/'+encodeURIComponent(person.id):''),person?'PATCH':'POST',fields)).event;
+        document.getElementById('participant-dialog').close();render();notify(mode==='link'?'ผูกบัญชีแล้ว':mode==='rename'?'บันทึกชื่อแล้ว':'เพิ่มรายชื่อแล้ว');
+      } catch(error) {document.getElementById('participant-error').textContent=error.message;throw error;}
+    });
+  }
   if(event.target.id==='profile-form'){
     event.preventDefault();const nickname=new FormData(event.target).get('nickname');
     return run(async()=>{member=(await api('/me','PATCH',{nickname})).member;if(requestedEvent){const id=requestedEvent;requestedEvent=null;await openEvent(id);}else await list();notify('บันทึกชื่อเล่นแล้ว');});
@@ -196,6 +250,7 @@ document.addEventListener('submit',event=>{
 });
 document.addEventListener('change',event=>{
   const input = event.target;
+  if(input.id==='participant-mode'){participantForm.mode=input.value;renderParticipantForm();return;}
   if (!input.hasAttribute('data-payment')) return;
   if (busy) {render();return;}
   return run(async()=>{
