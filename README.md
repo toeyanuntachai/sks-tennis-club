@@ -13,7 +13,7 @@
 - แชร์ข้อความและลิงก์นัดผ่านตัวเลือกผู้รับของ LINE หรือคัดลอกไปส่งเอง
 - ดึงรายชื่อใหม่ทุก 15 วินาทีขณะเปิดหน้ารายการ/รายละเอียด และมีปุ่มอัปเดตเอง
 
-ขณะนี้มีโค้ดและฐานข้อมูลจริง แต่ **ยังไม่ได้เชื่อม LINE หรือเผยแพร่เว็บ** เพราะยังไม่มี Channel ID, LIFF ID และ URL แบบ HTTPS หน้าต้อนรับจะแสดงว่ากำลังเตรียมเปิดใช้งานจนตั้งค่าครบ
+เผยแพร่แล้วที่ [SKS Tennis Club](https://sks-tennis-club-production.up.railway.app/) แต่ **ยังไม่ได้เชื่อม LINE** เพราะยังไม่มี Channel ID และ LIFF ID หน้าต้อนรับจะแสดงว่ากำลังเตรียมเปิดใช้งานจนตั้งค่าครบ
 
 ## เปิดในเครื่อง
 
@@ -69,6 +69,10 @@ node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'
 
 ## Deploy บน Railway
 
+โครงการ [sks-tennis-club](https://railway.com/project/48d7e695-2a07-4927-9af3-367a05080def) เชื่อม GitHub branch `main` แล้ว รันหนึ่ง instance ใน Singapore และเก็บ SQLite บน Volume ที่ `/data` ตั้ง `PORT=8080`, `SKS_ORIGIN` และ invite code ไว้ใน Railway Variables แล้ว ไม่ต้องสร้าง invite code ใหม่
+
+ใช้ `https://sks-tennis-club-production.up.railway.app/` เป็น LIFF Endpoint URL เมื่อสร้าง LIFF แล้วเติมเพียง `LINE_LOGIN_CHANNEL_ID` และ `LINE_LIFF_ID` ใน Railway Variables จากนั้น deploy และตรวจรับการเข้าสู่ระบบ/แชร์ด้วย LINE จริง
+
 ใช้ Node.js 24 ตาม `.node-version` Railway ตรวจคำสั่ง build/start จาก `package.json` โดย `prebuild` ทดสอบก่อน build Tailwind ตั้ง Healthcheck Path ของ service เป็น `/`
 
 1. สร้าง service จาก GitHub repository `toeyanuntachai/sks-tennis-club` บน branch `main`
@@ -87,3 +91,7 @@ node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'
 `npm test` ตรวจ API กับ SQLite จริง: การปฏิเสธ token/ลิงก์เชิญที่ผิด สิทธิ์ผู้จัด การลงชื่อของตัวเอง FIFO การถอน/เลื่อนคิว การเพิ่ม/ลดจำนวนที่รับ การยกเลิก และการเก็บข้อมูล รวมถึงการเปิดลิงก์หลัง LIFF initialization ด้วย SDK จำลอง
 
 `npm run build` สร้าง CSS ด้วย Tailwind CLI จาก `src/styles.css` และคลาสใน `public/` ตาม [Tailwind CLI](https://tailwindcss.com/docs/installation/tailwind-cli) ไม่มี Tailwind CDN สำหรับ production
+
+ตรวจ deploy วันที่ 4 ตุลาคม 2026: build และการทดสอบผ่านบน Node.js 24, หน้าเว็บ/CSS/โลโก้ตอบ 200 ผ่าน HTTPS, API รายชื่อปฏิเสธผู้ไม่ล็อกอินด้วย 401 และ URL ไฟล์ฐานข้อมูลตอบ 404
+
+`npm audit --omit=dev` ไม่พบช่องโหว่ ส่วน audit รวมเครื่องมือ build พบ 4 รายการจาก dependency chain ของ Tailwind CLI → watcher → micromatch → braces ตาม [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) ซึ่งยังไม่มี patched version ของ braces ณ วันที่ตรวจ เครื่องมือเหล่านี้ใช้ build CSS จากไฟล์ใน repository; เซิร์ฟเวอร์รับคำขอใช้เฉพาะโมดูล Node.js ในตัว ติดตามการแก้ไข upstream ก่อนอัปเดต dependency
