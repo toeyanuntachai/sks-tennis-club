@@ -51,6 +51,7 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onEscapeKeyDown,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
@@ -65,6 +66,11 @@ function DialogContent({
           className
         )}
         {...props}
+        onEscapeKeyDown={(event) => {
+          // Let an open combobox handle Escape before dismissing its parent dialog.
+          if (event.target instanceof HTMLElement && event.target.closest('[role="combobox"][aria-expanded="true"]')) event.preventDefault()
+          onEscapeKeyDown?.(event)
+        }}
       >
         {children}
         {showCloseButton && (

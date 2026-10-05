@@ -175,7 +175,8 @@ test('organizer adds, renames, links, withdraws and restores names; failed dialo
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   expect(requests.at(-1)).toMatchObject({ method: 'PATCH', data: { nickname: 'ชื่อใหม่' } });
   await user.click(screen.getByRole('button', { name: 'ผูกบัญชี: ' + guest.nickname }));
-  await user.selectOptions(screen.getByLabelText('สมาชิก'), 'registered');
+  await user.click(screen.getByRole('combobox', { name: 'สมาชิก' }));
+  await user.click(await screen.findByRole('option', { name: 'สมาชิกหนึ่ง' }));
   await user.click(screen.getByRole('button', { name: 'ยืนยันผูกบัญชี' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   expect(requests.at(-1)).toMatchObject({ path: '/api/events/e/participants/guest', method: 'PATCH', data: { memberId: 'registered' } });
@@ -185,6 +186,48 @@ test('organizer adds, renames, links, withdraws and restores names; failed dialo
   expect(requests.at(-1)).toMatchObject({ method: 'DELETE', data: {} });
   await user.click(screen.getByRole('button', { name: 'เพิ่มกลับ: ถอน' }));
   await waitFor(() => expect(requests.at(-1)).toMatchObject({ path: '/api/events/e/participants', method: 'POST', data: { memberId: 'withdrawn' } }));
+});
+
+test('member combobox searches and selects multiple accounts, removes chips and retains selections after failed batch save', async () => {
+  const event = detail(); let fail = true;
+  const requests = backend(event, ({ path, method }) => {
+    if (path.endsWith('/available-members')) return Response.json({ members: [
+      { id: 'first', nickname: 'เมย์' }, { id: 'second', nickname: 'โบว์' }, { id: 'third', nickname: 'เมย์' },
+    ] });
+    if (path.endsWith('/participants') && method === 'POST') return fail
+      ? Response.json({ message: 'บันทึกไม่สำเร็จ' }, { status: 500 }) : Response.json({ event });
+  });
+  const user = userEvent.setup(); render(<App />);
+  await user.click(await screen.findByRole('button', { name: '+ เพิ่มรายชื่อ' }));
+  await user.click(screen.getByRole('button', { name: 'เพิ่มรายชื่อ' }));
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'กรุณาเลือกสมาชิกอย่างน้อยหนึ่งคน');
+  expect(requests.filter(r => r.method === 'POST')).toHaveLength(0);
+  const input = screen.getByRole('combobox', { name: 'สมาชิก' });
+  await user.type(input, 'โบว์');
+  expect(screen.queryByRole('option', { name: 'เมย์' })).toBeNull();
+  await screen.findByRole('option', { name: 'โบว์' });
+  await user.keyboard('{ArrowDown}{Enter}');
+  expect(requests.filter(r => r.method === 'POST')).toHaveLength(0);
+  await user.type(input, 'เมย์');
+  const duplicates = await screen.findAllByRole('option', { name: 'เมย์' });
+  await user.click(duplicates[0]);
+  await user.type(input, 'เมย์');
+  await user.click((await screen.findAllByRole('option', { name: 'เมย์' }))[1]);
+  await user.click(input);
+  expect(input.getAttribute('aria-expanded')).toBe('true');
+  await user.keyboard('{Escape}');
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(input.getAttribute('aria-expanded')).toBe('false');
+  await user.click(screen.getByRole('button', { name: 'นำออก: โบว์' }));
+  expect(screen.queryByRole('button', { name: 'นำออก: โบว์' })).toBeNull();
+  await user.click(screen.getByRole('button', { name: 'เพิ่มรายชื่อ' }));
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'บันทึกไม่สำเร็จ');
+  expect(screen.getAllByRole('button', { name: 'นำออก: เมย์' })).toHaveLength(2);
+  expect(requests.at(-1)?.data).toEqual({ memberIds: ['first', 'third'] });
+  fail = false;
+  await user.click(screen.getByRole('button', { name: 'เพิ่มรายชื่อ' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(requests.at(-1)?.data).toEqual({ memberIds: ['first', 'third'] });
 });
 
 test('failed payment leaves the checkbox unchanged; successful response updates roster and server-calculated costs', async () => {

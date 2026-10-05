@@ -140,6 +140,33 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   // Organizer additions share the same FIFO and payment records as self signup.
   const rosterId=(await request('POST','/api/events',alice.cookie,{...fields,capacity:2})).data.event.id;
   const rosterPath='/api/events/'+rosterId, people=rosterPath+'/participants';
+  // Multi-selection is one atomic batch, in selection order, with existing entries unchanged.
+  const batchId=(await request('POST','/api/events',alice.cookie,fields)).data.event.id;
+  const batchPath='/api/events/'+batchId, batchPeople=batchPath+'/participants';
+  assert.equal((await request('POST',batchPeople,'',{memberIds:[bob.id]})).status,401);
+  assert.equal((await request('POST',batchPeople,bob.cookie,{memberIds:[bob.id]})).status,403);
+  for(const data of [{memberIds:[]},{memberIds:'bad'},{memberIds:[null]},{memberIds:[bob.id],memberId:bob.id},{memberIds:[bob.id],nickname:'ชื่อ'}]) {
+    assert.equal((await request('POST',batchPeople,alice.cookie,data)).status,400);
+  }
+  assert.equal((await request('POST',batchPeople,alice.cookie,{memberIds:[bob.id,'missing']})).status,404);
+  const batchDb=new DatabaseSync(databasePath);
+  assert.equal(batchDb.prepare('SELECT COUNT(*) AS n FROM registrations WHERE event_id=?').get(batchId).n,0);
+  assert.equal(batchDb.prepare('SELECT COUNT(*) AS n FROM event_payments WHERE event_id=?').get(batchId).n,0);
+  let batch=(await request('POST',batchPeople,alice.cookie,{memberIds:[cara.id,bob.id,cara.id,dan.id]})).data.event;
+  assert.deepEqual(batch.participants.map(p=>p.id),[cara.id]);
+  assert.deepEqual(batch.waitlist.map(p=>p.id),[bob.id,dan.id]);
+  assert.equal(batch.participants[0].paid,false);
+  await request('PATCH',batchPath+'/payment',alice.cookie,{memberId:bob.id,paid:true});
+  batch=(await request('POST',batchPeople,alice.cookie,{memberIds:[dan.id,bob.id,cara.id]})).data.event;
+  assert.deepEqual(batch.waitlist.map(p=>p.id),[bob.id,dan.id]);assert.equal(batch.waitlist[0].paid,true);
+  await request('DELETE',batchPeople+'/'+bob.id,alice.cookie,{});
+  batch=(await request('POST',batchPeople,alice.cookie,{memberIds:[bob.id]})).data.event;
+  assert.deepEqual(batch.waitlist.map(p=>p.id),[dan.id,bob.id]);assert.equal(batch.waitlist[1].paid,true);
+  batch=(await request('POST',batchPeople,alice.cookie,{nickname:'ชื่อไม่มีบัญชี'})).data.event;
+  assert.equal((await request('POST',batchPeople,alice.cookie,{memberIds:[batch.waitlist.at(-1).id]})).status,404);
+  await request('POST',batchPath+'/cancel',alice.cookie,{});
+  assert.equal((await request('POST',batchPeople,alice.cookie,{memberIds:[alice.id]})).status,409);
+  batchDb.close();
   assert.equal((await request('GET',rosterPath+'/available-members',bob.cookie)).status,403);
   const available=(await request('GET',rosterPath+'/available-members',alice.cookie)).data.members;
   assert.equal(available.length,4);

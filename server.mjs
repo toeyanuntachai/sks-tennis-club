@@ -400,19 +400,25 @@ export async function handleRequest(req, res) {
       atomic(() => {
         organizerEvent();
         if (req.method === 'POST' && !participantId && action === 'participants') {
-          if (Object.hasOwn(data, 'memberId') === Object.hasOwn(data, 'nickname')) fail(400, 'เลือกสมาชิกหรือพิมพ์ชื่ออย่างใดอย่างหนึ่ง');
-          let memberId;
+          if (['memberId', 'memberIds', 'nickname'].filter(key => Object.hasOwn(data, key)).length !== 1) fail(400, 'เลือกสมาชิกหรือพิมพ์ชื่ออย่างใดอย่างหนึ่ง');
+          let memberIds;
           if (Object.hasOwn(data, 'nickname')) {
             const nickname = text(data.nickname, 'ชื่อเล่น', 40);
-            memberId = randomUUID();
-            db.prepare('INSERT INTO members(id, nickname, guest_event_id) VALUES (?, ?, ?)').run(memberId, nickname, id);
+            memberIds = [randomUUID()];
+            db.prepare('INSERT INTO members(id, nickname, guest_event_id) VALUES (?, ?, ?)').run(memberIds[0], nickname, id);
           } else {
-            memberId = text(data.memberId, 'สมาชิก', 64);
-            const target = db.prepare('SELECT line_id, nickname, guest_event_id FROM members WHERE id = ?').get(memberId);
-            if (!target?.nickname || (target.line_id === null && target.guest_event_id !== id)) fail(404, 'ไม่พบสมาชิกที่เพิ่มในนัดนี้ได้');
+            const batch = Object.hasOwn(data, 'memberIds');
+            if (batch && (!Array.isArray(data.memberIds) || !data.memberIds.length)) fail(400, 'กรุณาเลือกสมาชิกอย่างน้อยหนึ่งคน');
+            memberIds = [...new Set((batch ? data.memberIds : [data.memberId]).map(value => text(value, 'สมาชิก', 64)))];
+            for (const memberId of memberIds) {
+              const target = db.prepare('SELECT line_id, nickname, guest_event_id FROM members WHERE id = ?').get(memberId);
+              if (!target?.nickname || (target.line_id === null && (batch || target.guest_event_id !== id))) fail(404, 'ไม่พบสมาชิกที่เพิ่มในนัดนี้ได้');
+            }
           }
-          db.prepare('INSERT INTO registrations(event_id, member_id) VALUES (?, ?) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, memberId);
-          db.prepare('INSERT INTO event_payments VALUES (?, ?, 0) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, memberId);
+          for (const memberId of memberIds) {
+            db.prepare('INSERT INTO registrations(event_id, member_id) VALUES (?, ?) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, memberId);
+            db.prepare('INSERT INTO event_payments VALUES (?, ?, 0) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, memberId);
+          }
         } else if (participantId && action === 'participants' && ['DELETE', 'PATCH'].includes(req.method)) {
           const target = db.prepare(`SELECT m.* FROM members m WHERE m.id = ? AND (
             EXISTS(SELECT 1 FROM registrations WHERE event_id = ? AND member_id = m.id)
