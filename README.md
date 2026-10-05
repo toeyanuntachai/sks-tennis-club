@@ -1,6 +1,6 @@
 # SKS Tennis Club
 
-เว็บลงชื่อนัดตีสำหรับกลุ่ม LINE ปกติ ใช้ Tailwind CSS และสีจากโลโก้ SKS: กรมท่า ครีม และเขียวใบไม้ รุ่นแรกยังไม่มีคะแนนหรือ ranking
+เว็บลงชื่อนัดตีสำหรับกลุ่ม LINE ปกติ ใช้ React + TypeScript, shadcn/ui และ Tailwind CSS พร้อมสีจากโลโก้ SKS: กรมท่า ครีม และเขียวใบไม้ รุ่นแรกยังไม่มีคะแนนหรือ ranking
 
 ## สิ่งที่ทำแล้ว
 
@@ -29,12 +29,27 @@
 ```sh
 cd /Users/anuntachai/workspaces/side-projects/sks-tennis-club
 npm ci
-npm run build
 npm test
 npm start
 ```
 
-เปิด http://127.0.0.1:4317 โดยไม่ต้องมี `.env` เพื่อดูหน้าต้อนรับ ต้อง build ใหม่เมื่อแก้ HTML, JavaScript หรือคลาส Tailwind แล้วรีเฟรชหน้าเว็บ
+เปิด http://127.0.0.1:4317 โดยไม่ต้องมี `.env` เพื่อดูหน้าต้อนรับ `npm test` ตรวจ TypeScript, build หน้าเว็บ และรันทดสอบทั้งหมด หากแก้หน้าเว็บแล้วต้องการดู production build ใหม่ ใช้ `npm run build` แล้วรีเฟรช
+
+ระหว่างพัฒนาหน้าเว็บ ใช้สอง terminal: `SKS_ORIGIN=http://127.0.0.1:5173 npm start` สำหรับ backend และ `npm run dev` สำหรับ Vite แล้วเปิด http://127.0.0.1:5173 การเรียกข้อมูลผ่าน proxy กลับไปยัง Node เดิม ส่วนการล็อกอินต้องตั้งค่า LINE และลิงก์เชิญตามปกติ
+
+## โครงสร้างหน้าเว็บ
+
+- `src/App.tsx`: การเลือกหน้าและบัญชีสมาชิก
+- `src/line-session.ts`: เริ่ม LIFF, อ่านลิงก์หลัง redirect, เข้าใช้ และแชร์นัด
+- `src/EventForm.tsx`: แบบร่างเปิด/แก้ไขนัด ค่าใช้จ่าย และ QR รวมการเก็บค่าเมื่อบันทึกล้มเหลว
+- `src/EventDetail.tsx` และ `src/ParticipantForm.tsx`: รายชื่อ สถานะจ่าย คำสั่งผู้จัด และ dialog
+- `src/EventList.tsx`: รายการนัดและการอัปเดตข้อมูล
+- `src/components/ui/`: โค้ด shadcn ที่นำมาจาก registry และปรับขนาดให้เหมาะกับมือถือ
+- `src/styles.css`: Tailwind และ theme สี SKS; `CONTEXT.md`: คำศัพท์ของระบบ
+
+กติกาคิว สิทธิ์ ยอดหาร และการรวมรายชื่อยังอยู่ใน `server.mjs` หน้าเว็บใช้ผลจาก server และเก็บเฉพาะสถานะการแสดงผลกับแบบร่าง ไม่เพิ่ม router หรือ state library แยก
+
+Vite สร้างไฟล์ใน `dist/` ซึ่งไม่เก็บใน Git Node ส่งเฉพาะหน้าเว็บ โลโก้ และไฟล์ JS/CSS ใน `dist/assets/` ไม่ใช้ SPA fallback กับเส้นทางข้อมูล และไม่เปิดให้อ่านไฟล์ทั่วไป CSP ยังคงจำกัด script จากต้นทางเดิมกับ LINE; style ที่ Radix ใช้ล็อกการเลื่อน dialog ได้ nonce ใหม่ในแต่ละคำขอหน้าเว็บ
 
 ## ตั้งค่า LINE และเปิดให้กลุ่มใช้
 
@@ -89,7 +104,7 @@ node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'
 
 ใช้ `https://sks-tennis-club-production.up.railway.app/` เป็น LIFF Endpoint URL ตั้ง `LINE_LOGIN_CHANNEL_ID` และ `LINE_LIFF_ID` ใน Railway Variables และ deploy แล้ว เข้าครั้งแรกด้วยลิงก์ LIFF ที่มี invite code จาก Railway Variables จากนั้นตรวจรับการเข้าสู่ระบบ/แชร์ด้วย LINE จริง
 
-ใช้ Node.js 24 ตาม `.node-version` Railway ตรวจคำสั่ง build/start จาก `package.json` โดย `prebuild` ทดสอบก่อน build Tailwind ตั้ง Healthcheck Path ของ service เป็น `/`
+ใช้ Node.js 24 ตาม `.node-version` Railway ตรวจคำสั่ง build/start จาก `package.json` โดย build ตรวจ TypeScript และสร้าง React/Tailwind ด้วย Vite ตั้ง Healthcheck Path ของ service เป็น `/` รัน `npm test` ก่อน push เพื่อทดสอบทั้งหน้าเว็บและ backend
 
 1. สร้าง service จาก GitHub repository `toeyanuntachai/sks-tennis-club` บน branch `main`
 2. เพิ่ม Volume เชื่อมกับ service โดย mount ที่ `/data` และใช้ service เพียงหนึ่ง instance
@@ -110,8 +125,10 @@ node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'
 
 การทดสอบค่าใช้จ่ายและ QR ครอบคลุมทุกช่องว่าง ค่าเดียว/QR อย่างเดียว ค่า 0 สตางค์ ค่าที่ไม่ถูกต้อง การปัดยอดและไม่นับสำรอง/ถอนชื่อ การเพิ่มกลับและรวมรายชื่อที่ทำให้ยอดเปลี่ยน สิทธิ์ผู้จัด ไฟล์ผิดชนิด/เกินขนาด เปลี่ยน/ลบรูป การเก็บข้อมูลเดิมเมื่อไม่ส่งฟิลด์ใหม่ และการ rollback ทั้งนัดและรูปเมื่อจำลอง SQLite เขียนไม่สำเร็จ UI จำลองตรวจว่าค่าและรูปที่เลือกยังอยู่หลังบันทึกล้มเหลว และ migration ตรวจว่ารูปกับค่าใช้จ่ายยังครบเมื่อเปิดเซิร์ฟเวอร์ใหม่
 
-`npm run build` สร้าง CSS ด้วย Tailwind CLI จาก `src/styles.css` และคลาสใน `public/` ตาม [Tailwind CLI](https://tailwindcss.com/docs/installation/tailwind-cli) ไม่มี Tailwind CDN สำหรับ production
+`npm run build` ตรวจ TypeScript และสร้าง React/Tailwind ผ่าน Vite ตาม [shadcn สำหรับ Vite](https://ui.shadcn.com/docs/installation/vite) และ [Tailwind Vite plugin](https://tailwindcss.com/docs/installation/using-vite) ไม่มี Tailwind CDN สำหรับ production
+
+`npm run test:ui` ใช้ React Testing Library กับ DOM จริงใน jsdom ตรวจ LINE redirect/session/profile, การเพิ่ม/ถอน/เพิ่มกลับ/ผูกบัญชี, เช็คจ่ายหลังบันทึกล้มเหลว, แบบร่างและไฟล์ QR, ช่อง optional, ยอดหารจาก server, การยกเลิก, การลงชื่อเอง, การแชร์และการหยุด polling ขณะเปิด dialog ส่วนการ decode รูปจริง CSP และหน้าจอมือถือยังต้องตรวจในเบราว์เซอร์ และ LINE จริงยังต้องตรวจในแอป LINE
 
 ตรวจ deploy วันที่ 4 ตุลาคม 2026: build และการทดสอบผ่านบน Node.js 24, หน้าเว็บ/CSS/โลโก้ตอบ 200 ผ่าน HTTPS, API รายชื่อปฏิเสธผู้ไม่ล็อกอินด้วย 401 และ URL ไฟล์ฐานข้อมูลตอบ 404
 
-`npm audit --omit=dev` ไม่พบช่องโหว่ ส่วน audit รวมเครื่องมือ build พบ 4 รายการจาก dependency chain ของ Tailwind CLI → watcher → micromatch → braces ตาม [GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) ซึ่งยังไม่มี patched version ของ braces ณ วันที่ตรวจ เครื่องมือเหล่านี้ใช้ build CSS จากไฟล์ใน repository; เซิร์ฟเวอร์รับคำขอใช้เฉพาะโมดูล Node.js ในตัว ติดตามการแก้ไข upstream ก่อนอัปเดต dependency
+การย้ายไป Vite นำ Tailwind CLI ที่ไม่ได้ใช้แล้วออก `npm audit` หลังติดตั้งชุดใหม่วันที่ 5 ตุลาคม 2026 ไม่พบช่องโหว่ที่รายงาน

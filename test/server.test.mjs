@@ -39,6 +39,7 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
     const result = {headers:{},status:0,bytes:Buffer.alloc(0)};
     const res = {
       setHeader(key,value){result.headers[key.toLowerCase()] = value;},
+      getHeader(key){return result.headers[key.toLowerCase()];},
       writeHead(status,headers){result.status=status;for(const [key,value]of Object.entries(headers||{}))this.setHeader(key,value);},
       end(value){result.bytes=Buffer.from(value);}
     };
@@ -250,7 +251,21 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   const logo=await request('GET','/sks-logo.png');
   assert.equal(logo.status,200);
   assert.equal(logo.bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
-  assert.match((await request('GET','/')).bytes.toString(),/href="\/styles.css"/);
+  const home = await request('GET','/');
+  assert.equal(home.status,200);
+  const html = home.bytes.toString();
+  const nonce = html.match(/name="csp-nonce" content="([^\"]+)"/)[1];
+  assert.match(home.headers['content-security-policy'],new RegExp("style-src 'self' 'nonce-"+nonce.replace(/[+]/g,'\\+')+"'"));
+  assert.doesNotMatch(home.headers['content-security-policy'],/unsafe-inline|unsafe-eval/);
+  assert.notEqual((await request('GET','/')).bytes.toString().match(/name="csp-nonce" content="([^\"]+)"/)[1],nonce);
+  const script = html.match(/src="(\/assets\/[^\"]+\.js)"/)[1];
+  const style = html.match(/href="(\/assets\/[^\"]+\.css)"/)[1];
+  assert.equal((await request('GET',script)).status,200);
+  assert.equal((await request('GET',style)).status,200);
+  assert.equal((await request('GET','/api/missing',alice.cookie)).status,404);
+  assert.equal((await request('GET','/api/missing')).status,401);
+  assert.equal((await request('GET','/assets/server.mjs')).status,404);
+  assert.equal((await request('GET','/assets/%2e%2e%2fserver.mjs')).status,404);
   assert.equal((await request('GET','/data/sks.sqlite')).status,404);
   assert.equal((await request('POST','/api/logout',alice.cookie,{})).status,200);
   assert.equal((await request('GET','/api/me',alice.cookie)).status,401);

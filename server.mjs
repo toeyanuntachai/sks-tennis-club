@@ -303,10 +303,8 @@ async function authenticate(req, res) {
 }
 
 const staticFiles = {
-  '/': ['index.html', 'text/html; charset=utf-8'],
-  '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/styles.css': ['styles.css', 'text/css; charset=utf-8'],
-  '/sks-logo.png': ['sks-logo.png', 'image/png']
+  '/': ['dist/index.html', 'text/html; charset=utf-8'],
+  '/sks-logo.png': ['public/sks-logo.png', 'image/png']
 };
 export async function handleRequest(req, res) {
   res.setHeader('Cache-Control', 'no-store');
@@ -316,11 +314,19 @@ export async function handleRequest(req, res) {
   try {
     const url = new URL(req.url, origin);
     const path = url.pathname;
-    if (req.method === 'GET' && staticFiles[path]) {
-      const [file, type] = staticFiles[path];
+    // Only serve Vite's flat JS/CSS assets, never arbitrary paths or /api fallbacks.
+    const asset = path.match(/^\/assets\/([A-Za-z0-9_-]+\.(js|css))$/);
+    const staticFile = Object.hasOwn(staticFiles, path) ? staticFiles[path] : asset ? ['dist/assets/' + asset[1], asset[2] === 'js' ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8'] : null;
+    if (req.method === 'GET' && staticFile) {
+      const [file, type] = staticFile;
       let content;
-      try { content = readFileSync(resolve(root, 'public', file)); }
+      try { content = readFileSync(resolve(root, file)); }
       catch { fail(503, 'กรุณาสร้างไฟล์เว็บด้วย npm run build ก่อนเปิดใช้งาน'); }
+      if (path === '/') {
+        const nonce = randomBytes(16).toString('base64');
+        res.setHeader('Content-Security-Policy', res.getHeader('Content-Security-Policy').replace("style-src 'self'", "style-src 'self' 'nonce-" + nonce + "'"));
+        content = Buffer.from(content.toString().replace('__SKS_STYLE_NONCE__', nonce));
+      }
       res.writeHead(200, { 'Content-Type': type });
       res.end(content);
       return;

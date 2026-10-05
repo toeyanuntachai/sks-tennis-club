@@ -1,6 +1,38 @@
 @import "tailwindcss";
-@source "../public/index.html";
-@source "../public/app.js";
+
+:root {
+  --background: #f8f4ec;
+  --foreground: #1d3c51;
+  --primary: #1d3c51;
+  --primary-foreground: #f8f4ec;
+  --secondary: #e7ebdf;
+  --secondary-foreground: #1d3c51;
+  --muted: #e7ebdf;
+  --muted-foreground: #626f6a;
+  --accent: #e7ebdf;
+  --accent-foreground: #1d3c51;
+  --destructive: #991b1b;
+  --border: #dedfd4;
+  --input: #dedfd4;
+  --ring: #576b4f;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
 
 @theme {
   --color-navy: #1d3c51;
@@ -8,7 +40,6 @@
   --color-surface: #fffdf8;
   --color-leaf: #576b4f;
   --color-sage: #e7ebdf;
-  --color-muted: #626f6a;
   --color-line: #dedfd4;
   --color-amber: #955924;
   --font-serif: Georgia, serif;
@@ -19,15 +50,9 @@
   button, a, input { touch-action: manipulation; }
   button { @apply cursor-pointer disabled:cursor-wait disabled:opacity-50; }
   :focus-visible { @apply outline-2 outline-offset-4 outline-leaf; }
-  dialog::backdrop { background: #1d3c5166; }
 }
 
 @layer components {
-  .btn { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-line bg-surface px-4 py-2.5 text-sm font-semibold; }
-  .btn-primary { @apply border-navy bg-navy text-cream; }
-  .btn-danger { @apply text-red-800; }
   .panel { @apply rounded-2xl border border-line bg-surface p-5; }
-  .field { @apply mt-2 w-full min-w-0 rounded-xl border border-line bg-surface px-3 py-3 text-base; }
-  .label { @apply block text-sm font-semibold; }
   .badge { @apply inline-flex rounded-full bg-sage px-3 py-1 text-xs font-semibold text-leaf; }
 }
