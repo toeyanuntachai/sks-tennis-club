@@ -20,6 +20,7 @@ function backend(event: EventDetail, handle?: (request: Request) => Response | P
     if (path === '/api/config') return Response.json({ ready: false, liffId: '' });
     if (path === '/api/me') return Response.json({ member: owner });
     if (path === '/api/events') return Response.json({ events: [event] });
+    if (/^\/api\/events\/[^/]+\/matches$/.test(path) && request.method === 'GET') return Response.json({ matches: [], players: [], canRecord: false });
     if (path === '/api/events/e' && request.method === 'GET') return Response.json({ event });
     if (path === '/api/events/e/available-members') return Response.json({ members: [{ id: 'registered', nickname: 'สมาชิกหนึ่ง' }] });
     if (path === '/api/invite') return Response.json({ url: 'https://liff.line.me/test/?invite=test-only' });
@@ -51,7 +52,7 @@ test('shared event is read after LIFF normalizes the URL; member names remain te
   };
   render(<App />);
   await screen.findByRole('heading', { name: 'นัดที่แชร์' });
-  expect(calls).toEqual(['/api/config', 'init', '/api/me', '/api/events/e']);
+  expect(calls).toEqual(['/api/config', 'init', '/api/me', '/api/events/e', '/api/events/e/matches']);
   expect(screen.getByRole('button', { name: 'ถอนชื่อของฉัน' })).toBeTruthy();
   expect(screen.queryByRole('checkbox')).toBeNull();
   expect(screen.queryByRole('button', { name: '+ เพิ่มรายชื่อ' })).toBeNull();
@@ -118,7 +119,7 @@ test('event form retains typed fields and the chosen QR after failure, saves sat
   expect((screen.getByLabelText('ค่าคอร์ตรวม (บาท)') as HTMLInputElement).value).toBe(costValue);
   fail = false; await user.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
   await screen.findByRole('heading', { name: 'นัดแก้ไข' });
-  expect(requests.at(-1)?.data).toMatchObject({ courtCostSatang: 100050, ballCostSatang: null, paymentQr: 'cG5n' });
+  expect(requests.filter(r => r.method !== 'GET').at(-1)?.data).toMatchObject({ courtCostSatang: 100050, ballCostSatang: null, paymentQr: 'cG5n' });
   expect(screen.getByText('ปัดขึ้นเป็นบาท · ส่วนเกินรวม 0.5 บาท')).toBeTruthy();
 });
 
@@ -167,25 +168,25 @@ test('organizer adds, renames, links, withdraws and restores names; failed dialo
   expect((screen.getByRole('textbox', { name: 'ชื่อเล่น' }) as HTMLInputElement).value).toBe('เพื่อนใหม่');
   fail = false; await user.click(screen.getByRole('button', { name: 'เพิ่มรายชื่อ' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(requests.at(-1)).toMatchObject({ path: '/api/events/e/participants', method: 'POST', data: { nickname: 'เพื่อนใหม่' } });
+  expect(requests.filter(r => r.method !== 'GET').at(-1)).toMatchObject({ path: '/api/events/e/participants', method: 'POST', data: { nickname: 'เพื่อนใหม่' } });
   await user.click(screen.getByRole('button', { name: 'แก้ชื่อ: ' + guest.nickname }));
   await user.clear(screen.getByRole('textbox', { name: 'ชื่อเล่น' }));
   await user.type(screen.getByRole('textbox', { name: 'ชื่อเล่น' }), 'ชื่อใหม่');
   await user.click(screen.getByRole('button', { name: 'บันทึกชื่อ' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(requests.at(-1)).toMatchObject({ method: 'PATCH', data: { nickname: 'ชื่อใหม่' } });
+  expect(requests.filter(r => r.method !== 'GET').at(-1)).toMatchObject({ method: 'PATCH', data: { nickname: 'ชื่อใหม่' } });
   await user.click(screen.getByRole('button', { name: 'ผูกบัญชี: ' + guest.nickname }));
   await user.click(screen.getByRole('combobox', { name: 'สมาชิก' }));
   await user.click(await screen.findByRole('option', { name: 'สมาชิกหนึ่ง' }));
   await user.click(screen.getByRole('button', { name: 'ยืนยันผูกบัญชี' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(requests.at(-1)).toMatchObject({ path: '/api/events/e/participants/guest', method: 'PATCH', data: { memberId: 'registered' } });
+  expect(requests.filter(r => r.method !== 'GET').at(-1)).toMatchObject({ path: '/api/events/e/participants/guest', method: 'PATCH', data: { memberId: 'registered' } });
   await user.click(screen.getByRole('button', { name: 'ถอนชื่อ: ' + guest.nickname }));
   await user.click(screen.getByRole('button', { name: 'ยืนยันถอนชื่อ' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(requests.at(-1)).toMatchObject({ method: 'DELETE', data: {} });
+  expect(requests.filter(r => r.method !== 'GET').at(-1)).toMatchObject({ method: 'DELETE', data: {} });
   await user.click(screen.getByRole('button', { name: 'เพิ่มกลับ: ถอน' }));
-  await waitFor(() => expect(requests.at(-1)).toMatchObject({ path: '/api/events/e/participants', method: 'POST', data: { memberId: 'withdrawn' } }));
+  await waitFor(() => expect(requests.filter(r => r.method !== 'GET').at(-1)).toMatchObject({ path: '/api/events/e/participants', method: 'POST', data: { memberId: 'withdrawn' } }));
 });
 
 test('member combobox searches and selects multiple accounts, removes chips and retains selections after failed batch save', async () => {
@@ -223,11 +224,11 @@ test('member combobox searches and selects multiple accounts, removes chips and 
   await user.click(screen.getByRole('button', { name: 'เพิ่มรายชื่อ' }));
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'บันทึกไม่สำเร็จ');
   expect(screen.getAllByRole('button', { name: 'นำออก: เมย์' })).toHaveLength(2);
-  expect(requests.at(-1)?.data).toEqual({ memberIds: ['first', 'third'] });
+  expect(requests.filter(r => r.method !== 'GET').at(-1)?.data).toEqual({ memberIds: ['first', 'third'] });
   fail = false;
   await user.click(screen.getByRole('button', { name: 'เพิ่มรายชื่อ' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(requests.at(-1)?.data).toEqual({ memberIds: ['first', 'third'] });
+  expect(requests.filter(r => r.method !== 'GET').at(-1)?.data).toEqual({ memberIds: ['first', 'third'] });
 });
 
 test('failed payment leaves the checkbox unchanged; successful response updates roster and server-calculated costs', async () => {

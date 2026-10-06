@@ -74,7 +74,8 @@ export function EventForm({ event, onBack, onSaved, onError, onWorking }: {
       <div className="grid grid-cols-2 gap-4">
         {field('title', 'ชื่อนัด', 'text', { maxLength: 80 }, true)}
         {field('venue', 'สนาม', 'text', { maxLength: 120 }, true)}
-        {field('date', 'วันที่', 'date', {}, true)}
+        {field('date', 'วันที่', 'date', { disabled: Boolean(event?.dateLocked) }, true)}
+        {event?.dateLocked && <p className="col-span-2 text-sm text-muted-foreground">นัดนี้มีผลแมตช์แล้ว จึงเปลี่ยนวันไม่ได้เพื่อรักษารอบอันดับ</p>}
         {field('start', 'เริ่ม', 'time')}{field('end', 'สิ้นสุด', 'time')}
         {field('courts', 'จำนวนคอร์ต', 'number', { min: 1, max: 10000, step: 1 })}
         {field('capacity', 'จำนวนคนที่รับ', 'number', { min: Math.max(1, event?.confirmed || 1), max: 10000, step: 1 })}

@@ -122,8 +122,29 @@ if (!costColumns.some(column => column.name === 'court_cost_satang')) {
 }
 db.exec(paymentQrSchema);
 
+if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='matches'").get()) {
+  if (databasePath !== ':memory:') {
+    const backup = resolve(databasePath) + '.before-ranking-' + Date.now() + '-' + randomUUID() + '.sqlite';
+    db.prepare('VACUUM INTO ?').run(backup);
+    console.log('SQLite backup created before ranking migration: ' + backup);
+  }
+  atomic(() => db.exec(`CREATE TABLE matches (
+    id TEXT PRIMARY KEY, event_id TEXT NOT NULL REFERENCES events(id),
+    player1 TEXT NOT NULL REFERENCES members(id), player2 TEXT NOT NULL REFERENCES members(id),
+    player3 TEXT NOT NULL REFERENCES members(id), player4 TEXT NOT NULL REFERENCES members(id),
+    score_a INTEGER NOT NULL, score_b INTEGER NOT NULL,
+    signature TEXT NOT NULL, request_id TEXT NOT NULL,
+    created_by TEXT NOT NULL REFERENCES members(id), created_at INTEGER NOT NULL,
+    updated_by TEXT NOT NULL REFERENCES members(id), updated_at INTEGER NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1, voided INTEGER NOT NULL DEFAULT 0 CHECK(voided IN (0,1)),
+    UNIQUE(event_id, created_by, request_id),
+    CHECK(player1<>player2 AND player1<>player3 AND player1<>player4 AND player2<>player3 AND player2<>player4 AND player3<>player4),
+    CHECK((score_a=4 AND score_b BETWEEN 0 AND 2) OR (score_b=4 AND score_a BETWEEN 0 AND 2) OR (score_a=3 AND score_b=3))
+  ); CREATE INDEX matches_event ON matches(event_id, created_at);`));
+}
+
 const digest = value => createHash('sha256').update(value).digest('hex');
-function fail(status, message) { throw Object.assign(new Error(message), { status }); }
+function fail(status, message, code) { throw Object.assign(new Error(message), { status, code }); }
 function atomic(work) {
   db.exec('BEGIN IMMEDIATE');
   try { const result = work(); db.exec('COMMIT'); return result; }
@@ -252,10 +273,58 @@ function detail(id, member) {
     courtCostSatang, ballCostSatang, totalCostSatang, sharePeople: event.confirmed, sharePerPersonSatang,
     roundingSurplusSatang: sharePerPersonSatang === null ? null : sharePerPersonSatang * event.confirmed - totalCostSatang,
     hasPaymentQr: Boolean(db.prepare('SELECT 1 FROM event_payment_qr WHERE event_id = ?').get(id)),
+    dateLocked: Boolean(db.prepare('SELECT 1 FROM matches WHERE event_id = ?').get(id)),
     participants: rows.slice(0, event.capacity),
     waitlist: rows.slice(event.capacity),
     withdrawn
   };
+}
+function matchPlayers(id) {
+  return db.prepare(`SELECT m.id, m.nickname FROM members m WHERE m.line_id IS NOT NULL AND m.nickname IS NOT NULL AND (
+    EXISTS(SELECT 1 FROM registrations WHERE event_id=? AND member_id=m.id)
+    OR EXISTS(SELECT 1 FROM event_payments WHERE event_id=? AND member_id=m.id)) ORDER BY m.nickname, m.id`).all(id, id);
+}
+function matchView(row, member, event) {
+  const person = id => db.prepare('SELECT id, nickname FROM members WHERE id=?').get(id);
+  return { id: row.id, teamA: [person(row.player1), person(row.player2)], teamB: [person(row.player3), person(row.player4)],
+    scoreA: row.score_a, scoreB: row.score_b, createdBy: person(row.created_by), updatedBy: person(row.updated_by),
+    createdAt: row.created_at, updatedAt: row.updated_at, version: row.version, voided: Boolean(row.voided),
+    canEdit: !row.voided && (row.created_by === member.id || event.organizer_id === member.id) };
+}
+function matchDetail(id, member) {
+  const event = eventRow(id);
+  return { matches: db.prepare('SELECT * FROM matches WHERE event_id=? ORDER BY created_at DESC, id').all(id).map(row => matchView(row, member, event)),
+    players: matchPlayers(id), canRecord: !event.cancelled && Date.now() >= new Date(event.date + 'T' + event.start + ':00+07:00').getTime() };
+}
+function matchFields(data, id) {
+  if (!Array.isArray(data.teamA) || data.teamA.length !== 2 || !Array.isArray(data.teamB) || data.teamB.length !== 2) fail(400, 'เลือกผู้เล่นทีมละสองคน');
+  const players = [...data.teamA, ...data.teamB].map(value => text(value, 'ผู้เล่น', 64));
+  if (new Set(players).size !== 4) fail(400, 'ผู้เล่นทั้งสี่คนต้องไม่ซ้ำกัน');
+  const eligible = new Set(matchPlayers(id).map(p => p.id));
+  if (players.some(id => !eligible.has(id))) fail(400, 'เลือกสมาชิกที่มีบัญชีและมีชื่อในนัดนี้เท่านั้น');
+  const a = data.scoreA, b = data.scoreB;
+  if (!Number.isInteger(a) || !Number.isInteger(b) || !((a === 4 && b >= 0 && b <= 2) || (b === 4 && a >= 0 && a <= 2) || (a === 3 && b === 3))) fail(400, 'เลือกสกอร์ 4–0, 4–1, 4–2 หรือ 3–3');
+  const teams = [{ players: players.slice(0, 2).sort(), score: a }, { players: players.slice(2).sort(), score: b }].sort((x, y) => x.players.join(',').localeCompare(y.players.join(',')));
+  return { players, a, b, signature: JSON.stringify(teams) };
+}
+function ranking(month, member) {
+  if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month)) fail(400, 'เดือนต้องเป็น YYYY-MM');
+  // ponytail: aggregate this small club on demand; add a cached projection only if measured traffic requires it.
+  const rows = db.prepare(`WITH results AS (
+    SELECT player1 AS member_id, score_a AS own, score_b AS opponent FROM matches m JOIN events e ON e.id=m.event_id WHERE substr(e.date,1,7)=? AND m.voided=0
+    UNION ALL SELECT player2, score_a, score_b FROM matches m JOIN events e ON e.id=m.event_id WHERE substr(e.date,1,7)=? AND m.voided=0
+    UNION ALL SELECT player3, score_b, score_a FROM matches m JOIN events e ON e.id=m.event_id WHERE substr(e.date,1,7)=? AND m.voided=0
+    UNION ALL SELECT player4, score_b, score_a FROM matches m JOIN events e ON e.id=m.event_id WHERE substr(e.date,1,7)=? AND m.voided=0
+  ) SELECT p.id, p.nickname, COUNT(*) AS played, SUM(own>opponent) AS wins, SUM(own=opponent) AS draws, SUM(own<opponent) AS losses,
+    SUM(CASE WHEN own>opponent THEN 3 WHEN own=opponent THEN 1 ELSE 0 END) AS points
+    FROM results r JOIN members p ON p.id=r.member_id GROUP BY p.id ORDER BY points DESC, p.nickname, p.id`).all(month, month, month, month);
+  let previous, place;
+  const standings = rows.map((row, i) => {
+    if (row.points !== previous) place = i + 1;
+    previous = row.points;
+    return { ...row, rank: place, winPercent: row.wins / row.played * 100 };
+  });
+  return { month, months: db.prepare('SELECT DISTINCT substr(e.date,1,7) AS month FROM events e JOIN matches m ON m.event_id=e.id ORDER BY month DESC').all().map(r => r.month), standings, mine: standings.find(r => r.id === member.id) || null };
 }
 const loginAttempts = new Map();
 function limitLogin(req) {
@@ -351,6 +420,10 @@ export async function handleRequest(req, res) {
       return send(res, 200, { member: { ...member, nickname } });
     }
     if (!member.nickname) fail(409, 'กรุณาตั้งชื่อเล่นก่อน');
+    if (req.method === 'GET' && path === '/api/ranking') {
+      const parts = Object.fromEntries(new Intl.DateTimeFormat('en', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit' }).formatToParts(new Date()).map(p => [p.type, p.value]));
+      return send(res, 200, ranking(url.searchParams.get('month') ?? parts.year + '-' + parts.month, member));
+    }
     if (req.method === 'GET' && path === '/api/invite') {
       const url = new URL('https://liff.line.me/' + encodeURIComponent(liffId) + '/');
       url.searchParams.set('invite', inviteCode);
@@ -372,10 +445,48 @@ export async function handleRequest(req, res) {
       });
       return send(res, 201, { event: detail(id, member) });
     }
-    const match = path.match(/^\/api\/events\/([^/]+)(?:\/(signup|cancel|payment|payment-qr|available-members|participants)(?:\/([^/]+))?)?$/);
+    const match = path.match(/^\/api\/events\/([^/]+)(?:\/(signup|cancel|payment|payment-qr|available-members|participants|matches)(?:\/([^/]+))?)?$/);
     if (!match) fail(404, 'ไม่พบข้อมูลนี้');
     const [, id, action, participantId] = match;
-    if (participantId && action !== 'participants') fail(404, 'ไม่พบข้อมูลนี้');
+    if (participantId && action !== 'participants' && action !== 'matches') fail(404, 'ไม่พบข้อมูลนี้');
+    if (action === 'matches') {
+      if (req.method === 'GET' && !participantId) return send(res, 200, matchDetail(id, member));
+      const data = await body(req);
+      let replay = false;
+      atomic(() => {
+        const event = eventRow(id);
+        if (req.method === 'POST' && !participantId) {
+          const requestId = text(data.requestId, 'รหัสบันทึก', 64);
+          if (!/^[A-Za-z0-9_-]{16,64}$/.test(requestId)) fail(400, 'รหัสบันทึกไม่ถูกต้อง');
+          const previous = db.prepare('SELECT * FROM matches WHERE event_id=? AND created_by=? AND request_id=?').get(id, member.id, requestId);
+          if (previous) {
+            const original = [previous.player1, previous.player2, previous.player3, previous.player4];
+            if (JSON.stringify(original) !== JSON.stringify([...(Array.isArray(data.teamA) ? data.teamA : []), ...(Array.isArray(data.teamB) ? data.teamB : [])]) || data.scoreA !== previous.score_a || data.scoreB !== previous.score_b) fail(409, 'รหัสบันทึกนี้ใช้กับผลอื่นแล้ว');
+            replay = true; return;
+          }
+          if (event.cancelled) fail(409, 'นัดนี้ยกเลิกแล้ว ไม่รับผลใหม่');
+          if (Date.now() < new Date(event.date + 'T' + event.start + ':00+07:00').getTime()) fail(409, 'บันทึกผลได้ตั้งแต่เวลาเริ่มนัด');
+          const fields = matchFields(data, id);
+          if (data.confirmDuplicate !== true && db.prepare('SELECT 1 FROM matches WHERE event_id=? AND signature=? AND voided=0').get(id, fields.signature)) fail(409, 'มีคู่และสกอร์นี้แล้ว ยืนยันว่าเป็นแมตช์ใหม่หรือไม่', 'duplicate-match');
+          const now = Date.now();
+          db.prepare(`INSERT INTO matches(id,event_id,player1,player2,player3,player4,score_a,score_b,signature,request_id,created_by,created_at,updated_by,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(randomUUID(), id, ...fields.players, fields.a, fields.b, fields.signature, requestId, member.id, now, member.id, now);
+        } else if (participantId && ['PATCH', 'DELETE'].includes(req.method)) {
+          const row = db.prepare('SELECT * FROM matches WHERE id=? AND event_id=?').get(participantId, id);
+          if (!row) fail(404, 'ไม่พบแมตช์นี้');
+          if (row.created_by !== member.id && event.organizer_id !== member.id) fail(403, 'เฉพาะผู้กรอกหรือผู้เปิดนัดเท่านั้นที่แก้ผลได้');
+          if (row.voided) fail(409, 'ผลนี้ยกเลิกแล้ว');
+          if (data.version !== row.version) fail(409, 'ผลนี้มีการเปลี่ยนแปลงแล้ว กรุณาอัปเดตก่อนแก้');
+          if (req.method === 'DELETE') db.prepare('UPDATE matches SET voided=1, updated_by=?, updated_at=?, version=version+1 WHERE id=?').run(member.id, Date.now(), participantId);
+          else {
+            const fields = matchFields(data, id);
+            if (data.confirmDuplicate !== true && db.prepare('SELECT 1 FROM matches WHERE event_id=? AND signature=? AND voided=0 AND id<>?').get(id, fields.signature, participantId)) fail(409, 'มีคู่และสกอร์นี้แล้ว ยืนยันว่าเป็นคนละแมตช์หรือไม่', 'duplicate-match');
+            db.prepare('UPDATE matches SET player1=?, player2=?, player3=?, player4=?, score_a=?, score_b=?, signature=?, updated_by=?, updated_at=?, version=version+1 WHERE id=?').run(...fields.players, fields.a, fields.b, fields.signature, member.id, Date.now(), participantId);
+          }
+        } else fail(404, 'ไม่พบข้อมูลนี้');
+      });
+      return send(res, req.method === 'POST' && !replay ? 201 : 200, matchDetail(id, member));
+    }
     if (req.method === 'GET' && !action) return send(res, 200, { event: detail(id, member) });
     if (req.method === 'GET' && action === 'payment-qr') {
       eventRow(id);
@@ -475,6 +586,7 @@ export async function handleRequest(req, res) {
         if (event.organizer_id !== member.id) fail(403, 'เฉพาะผู้สร้างนัดเท่านั้นที่แก้ไขได้');
         if (event.cancelled) fail(409, 'นัดนี้ยกเลิกแล้ว');
         if (fields.capacity < Math.min(event.total, event.capacity)) fail(409, 'จำนวนที่รับต้องไม่น้อยกว่าคนที่ได้ที่แล้ว');
+        if (fields.date !== event.date && db.prepare('SELECT 1 FROM matches WHERE event_id=?').get(id)) fail(409, 'นัดนี้มีผลแมตช์แล้ว เปลี่ยนวันไม่ได้');
         const payment = paymentFields(data, event);
         db.prepare('UPDATE events SET title=?, venue=?, date=?, start=?, end=?, courts=?, court_names=?, capacity=?, court_cost_satang=?, ball_cost_satang=? WHERE id=?')
           .run(fields.title, fields.venue, fields.date, fields.start, fields.end, fields.courts, fields.courtNames, fields.capacity, payment.courtCostSatang, payment.ballCostSatang, id);
@@ -494,15 +606,22 @@ export async function handleRequest(req, res) {
       await body(req);
       atomic(() => {
         if (eventRow(id).cancelled) fail(409, 'นัดนี้ยกเลิกแล้ว');
-        if (req.method === 'POST') db.prepare('INSERT INTO registrations(event_id, member_id) VALUES (?, ?) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, member.id);
-        else db.prepare('DELETE FROM registrations WHERE event_id = ? AND member_id = ?').run(id, member.id);
+        if (req.method === 'POST') {
+          db.prepare('INSERT INTO registrations(event_id, member_id) VALUES (?, ?) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, member.id);
+          db.prepare('INSERT INTO event_payments VALUES (?, ?, 0) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, member.id);
+        } else {
+          db.prepare(`INSERT INTO event_payments(event_id,member_id,paid)
+            SELECT event_id,member_id,0 FROM registrations WHERE event_id=? AND member_id=?
+            ON CONFLICT(event_id,member_id) DO NOTHING`).run(id, member.id);
+          db.prepare('DELETE FROM registrations WHERE event_id = ? AND member_id = ?').run(id, member.id);
+        }
       });
       return send(res, 200, { event: detail(id, member) });
     }
     fail(404, 'ไม่พบข้อมูลนี้');
   } catch (error) {
     if (!error.status) console.error('SKS request failed:', error.message);
-    send(res, error.status || 500, { message: error.status ? error.message : 'บันทึกไม่สำเร็จ กรุณาลองใหม่' });
+    send(res, error.status || 500, { message: error.status ? error.message : 'บันทึกไม่สำเร็จ กรุณาลองใหม่', ...(error.code ? { code: error.code } : {}) });
   }
 }
 

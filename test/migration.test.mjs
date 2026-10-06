@@ -28,11 +28,12 @@ for (const guestSchema of [false, true]) test('cost migration preserves WAL data
   });
   assert.match(startup(),/backup created before cost migration/);
   const backups=readdirSync(directory).filter(name=>name.includes('.before-'));
-  assert.equal(backups.length,guestSchema?1:2);
+  assert.equal(backups.length,guestSchema?2:3);
   for(const filename of backups) {
     const backup=new DatabaseSync(join(directory,filename));
     for(const table of tables)assert.deepEqual(backup.prepare('SELECT '+Object.keys(before[table][0]).join(',')+' FROM '+table).all().map(row=>({...row})),before[table]);
-    assert.equal(backup.prepare('PRAGMA table_info(events)').all().some(c=>c.name==='court_cost_satang'),false);
+    assert.equal(backup.prepare('PRAGMA table_info(events)').all().some(c=>c.name==='court_cost_satang'),filename.includes('.before-ranking-'));
+    if (filename.includes('.before-ranking-')) assert.equal(backup.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='matches'").get().n,0);
     backup.close();
   }
   assert.equal(legacy.prepare('PRAGMA table_info(members)').all().find(c=>c.name==='line_id').notnull,0);

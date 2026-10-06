@@ -5,10 +5,11 @@ import { Label } from '@/components/ui/label';
 import { EventForm } from './EventForm';
 import { EventList } from './EventList';
 import { EventDetail } from './EventDetail';
+import { Ranking } from './Ranking';
 import { api, ApiError, errorMessage, eventPath, type EventDetail as Detail, type Member } from './lib/api';
 import { lineSession, type Config } from './line-session';
 
-type Screen = { page: 'welcome' | 'loading' | 'list' | 'profile' } | { page: 'detail'; event: Detail } | { page: 'form'; event: Detail | null };
+type Screen = { page: 'welcome' | 'loading' | 'list' | 'profile' | 'ranking' } | { page: 'detail'; event: Detail } | { page: 'form'; event: Detail | null };
 export function App() {
   const [screen, setScreen] = useState<Screen>({ page: 'loading' }), [member, setMember] = useState<Member | null>(null);
   const [config, setConfig] = useState<Config>({ ready: false, liffId: '' }), [busy, setBusy] = useState(false);
@@ -22,7 +23,7 @@ export function App() {
     notify(errorMessage(error));
   }, [notify]);
   const move = useCallback((next: Screen) => {
-    if (next.page === 'detail' || next.page === 'list') {
+    if (next.page === 'detail' || next.page === 'list' || next.page === 'ranking') {
       const url = new URL(location.href);
       if (next.page === 'detail') url.searchParams.set('event', next.event.id); else url.searchParams.delete('event');
       url.searchParams.delete('invite'); history.replaceState(null, '', url);
@@ -68,10 +69,12 @@ export function App() {
       {member?.nickname && <div className="shrink-0"><Button variant="link" disabled={busy} className="px-1" onClick={() => move({ page: 'profile' })}>{member.nickname}</Button><Button variant="ghost" disabled={busy} className="ml-1 px-1 text-xs text-muted-foreground" onClick={() => void run(async () => { await api('/logout', 'POST', {}); setMember(null); move({ page: 'welcome' }); })}>ออก</Button></div>}
     </header>
     <main id="app" className="mx-auto max-w-5xl px-4 py-8 pb-24 sm:px-6" aria-busy={busy}><fieldset disabled={busy} className="min-w-0">
+      {member?.nickname && ['list', 'detail', 'ranking'].includes(screen.page) && <nav aria-label="เมนูหลัก" className="mb-6 flex gap-2"><Button variant={screen.page === 'list' ? 'default' : 'outline'} disabled={busy || working} onClick={() => move({ page: 'list' })}>นัดตี</Button><Button variant={screen.page === 'ranking' ? 'default' : 'outline'} disabled={busy || working} onClick={() => move({ page: 'ranking' })}>Ranking</Button></nav>}
       {screen.page === 'loading' && <p role="status" className="py-20 text-center text-muted-foreground">กำลังเปิดนัดตีของกลุ่ม…</p>}
       {screen.page === 'welcome' && <section className="mx-auto max-w-xl rounded-3xl border border-border bg-surface px-6 py-10 text-center sm:px-10 sm:py-14"><img src="/sks-logo.png" alt="" width={112} height={112} className="mx-auto mb-6 size-28 rounded-full" /><p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-leaf">SKS Tennis Club</p><h1 id="page-title" tabIndex={-1} className="mb-4 text-3xl font-bold sm:text-4xl">นัดตีครั้งหน้า<br />เจอกันที่คอร์ต</h1><p className="mb-8 text-muted-foreground">ดูนัดของกลุ่ม ลงชื่อเล่นทั้งนัด<br />ถ้าเต็มก็เข้าคิวสำรองได้</p>{config.ready ? <><Button disabled={busy} className="w-full" onClick={() => void run(() => enter())}>เข้าใช้งานผ่าน LINE</Button><p className="mt-4 text-xs text-muted-foreground">สมาชิกใหม่เข้าร่วมผ่านลิงก์เชิญจากกลุ่ม</p></> : <p className="rounded-xl bg-sage p-4 text-sm text-leaf">กำลังเตรียมเปิดใช้งาน<br />ผู้จัดกลุ่มจะแชร์ลิงก์เมื่อพร้อมครับ</p>}</section>}
       {screen.page === 'profile' && member && <Profile key={member.id} member={member} suggested={suggested} onWorking={setWorking} onError={onError} onSaved={current => void run(async () => { setMember(current); await memberScreen(current); notify('บันทึกชื่อเล่นแล้ว'); })} />}
       {screen.page === 'list' && member && <EventList onError={onError} onCreate={() => move({ page: 'form', event: null })} onOpen={id => void run(async () => move({ page: 'detail', event: (await api<{ event: Detail }>(eventPath(id))).event }))} />}
+      {screen.page === 'ranking' && member && <Ranking member={member} onError={onError} onBack={() => move({ page: 'list' })} />}
       {screen.page === 'form' && member && <EventForm key={screen.event?.id || 'new'} event={screen.event} onWorking={setWorking} onError={onError} onBack={() => move(screen.event ? { page: 'detail', event: screen.event } : { page: 'list' })} onSaved={event => { move({ page: 'detail', event }); notify('บันทึกนัดแล้ว'); }} />}
       {screen.page === 'detail' && member && <EventDetail key={screen.event.id} initial={screen.event} member={member} config={config} line={line} notify={notify} onWorking={setWorking} onError={onError} onBack={() => move({ page: 'list' })} onEdit={event => move({ page: 'form', event })} />}
     </fieldset></main>

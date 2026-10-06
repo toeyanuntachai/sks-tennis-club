@@ -116,7 +116,7 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   assert.deepEqual(event.participants.map(p=>p.id),[cara.id]);
   assert.deepEqual(event.waitlist.map(p=>p.id),[bob.id]);
   assert.equal(event.waitlist[0].paid,true);
-  assert.deepEqual(event.withdrawn,[]);
+  assert.deepEqual(event.withdrawn,[{id:alice.id,nickname:'ต้น',isGuest:false,paid:false}]);
   await request('POST',signup,alice.cookie,{});
   await Promise.all([request('POST',signup,cara.cookie,{}),request('POST',signup,cara.cookie,{})]);
   await request('DELETE',signup,dan.cookie,{memberId:cara.id});
