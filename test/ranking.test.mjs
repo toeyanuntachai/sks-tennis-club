@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -45,7 +45,7 @@ test('monthly doubles ranking, corrections, permissions, duplicate requests and 
   const guest=(await request('POST',path+'/participants','a',{nickname:'guest'})).data.event.waitlist.find(p=>p.isGuest);
   for (const invalid of [
     {...payload,teamA:['a','a']}, {...payload,teamA:['a']}, {...payload,teamB:['c','e']},
-    {...payload,teamB:['c',guest.id]}, {...payload,scoreA:4,scoreB:3}, {...payload,scoreA:'4'}, {...payload,scoreA:6}, {...payload,requestId:'bad'}
+    {...payload,teamB:['c',guest.id]}, {...payload,scoreA:4,scoreB:3}, {...payload,scoreA:'4'}, {...payload,scoreA:6,scoreB:5}, {...payload,scoreA:5,scoreB:4}, {...payload,scoreA:7,scoreB:5}, {...payload,requestId:'bad'}
   ]) assert.equal((await request('POST',matches,'b',invalid)).status,400);
   const created=await request('POST',matches,'b',payload); assert.equal(created.status,201);
   const match=created.data.matches[0]; assert.equal(match.createdBy.id,'b'); assert.equal(match.canEdit,true);
@@ -94,18 +94,44 @@ test('monthly doubles ranking, corrections, permissions, duplicate requests and 
   const future=await event({date:'2026-10-01',start:'01:00',end:'02:00'});
   assert.equal((await request('POST',future+'/matches','b',payload)).status,409);
   assert.equal((await request('GET',future+'/matches')).data.canRecord,false);
+  // Recreate the deployed four-game constraint, retaining real history and revisions.
+  const legacyPath=databasePath+'.legacy.sqlite';
+  db.prepare('VACUUM INTO ?').run(legacyPath);
+  const legacy=new DatabaseSync(legacyPath);
+  const legacyContents=Object.fromEntries(['members','sessions','events','registrations','event_payments','matches'].map(table=>[table,legacy.prepare('SELECT * FROM '+table).all()]));
+  const oldSchema=legacy.prepare("SELECT sql FROM sqlite_master WHERE name='matches'").get().sql.replace(' OR (score_a=6 AND score_b BETWEEN 0 AND 4) OR (score_b=6 AND score_a BETWEEN 0 AND 4) OR (score_a=5 AND score_b=5)','');
+  legacy.exec('BEGIN IMMEDIATE');
+  legacy.exec(oldSchema.replace('CREATE TABLE matches','CREATE TABLE matches_legacy'));
+  legacy.exec('INSERT INTO matches_legacy SELECT * FROM matches; DROP TABLE matches; ALTER TABLE matches_legacy RENAME TO matches; CREATE INDEX matches_event ON matches(event_id, created_at); COMMIT;');
+  legacy.close();
   // Every accepted score direction and concurrent double-submit.
-  for (const [i,[scoreA,scoreB]] of [[4,0],[4,1],[4,2],[3,3],[0,4],[1,4],[2,4]].entries()) {
+  for (const [i,[scoreA,scoreB]] of [[4,0],[4,1],[4,2],[3,3],[0,4],[1,4],[2,4],[6,0],[6,1],[6,2],[6,3],[6,4],[5,5],[0,6],[1,6],[2,6],[3,6],[4,6]].entries()) {
     const body={...payload,scoreA,scoreB,requestId:'october_score_request_'+i};
     const responses=await Promise.all([request('POST',october+'/matches','b',body),request('POST',october+'/matches','b',body)]);
     assert.deepEqual(responses.map(r=>r.status).sort(),[200,201]);
   }
   board=(await request('GET','/api/ranking')).data;
-  assert.deepEqual(board.standings.map(p=>[p.rank,p.points,p.played,p.wins,p.draws,p.losses]),Array(4).fill([1,10,7,3,1,3]));
+  assert.deepEqual(board.standings.map(p=>[p.rank,p.points,p.played,p.wins,p.draws,p.losses]),Array(4).fill([1,26,18,8,2,8]));
   assert.deepEqual(board.months,['2026-10','2026-09']);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM matches').get().n,9);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM matches').get().n,20);
   assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
   db.close();
   const restarted=execFileSync(process.execPath,['--input-type=module','-e',`await import(${JSON.stringify(new URL('../server.mjs',import.meta.url).href)}); const {DatabaseSync}=await import('node:sqlite'); const db=new DatabaseSync(process.env.SKS_DATABASE_PATH); console.log(JSON.stringify(db.prepare('SELECT COUNT(*) AS total, SUM(voided) AS voided FROM matches').get())); db.close();`],{env:{...process.env,SKS_DATABASE_PATH:databasePath},encoding:'utf8'});
-  assert.deepEqual(JSON.parse(restarted),{total:9,voided:1});
+  assert.deepEqual(JSON.parse(restarted),{total:20,voided:1});
+  for (let restart=0;restart<2;restart++) {
+    execFileSync(process.execPath,['--input-type=module','-e',`await import(${JSON.stringify(new URL('../server.mjs',import.meta.url).href)});`],{env:{...process.env,SKS_DATABASE_PATH:legacyPath},encoding:'utf8'});
+    const migrated=new DatabaseSync(legacyPath);
+    for (const [table,rows] of Object.entries(legacyContents)) assert.deepEqual(migrated.prepare('SELECT * FROM '+table).all(),rows);
+    assert.deepEqual(migrated.prepare('PRAGMA foreign_key_check').all(),[]);
+    assert.match(migrated.prepare("SELECT sql FROM sqlite_master WHERE name='matches'").get().sql,/score_a=6/);
+    assert.equal(migrated.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name='matches_event'").get().n,1);
+    migrated.close();
+  }
+  const backups=readdirSync(dirname(legacyPath)).filter(name=>name.startsWith('club.sqlite.legacy.sqlite.before-six-game-scores-'));
+  assert.equal(backups.length,1);
+  const backup=new DatabaseSync(join(dirname(legacyPath),backups[0]));
+  assert.deepEqual(backup.prepare('SELECT * FROM matches').all(),legacyContents.matches);
+  assert.doesNotMatch(backup.prepare("SELECT sql FROM sqlite_master WHERE name='matches'").get().sql,/score_a=6/);
+  backup.close();
+
 });

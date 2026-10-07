@@ -122,13 +122,7 @@ if (!costColumns.some(column => column.name === 'court_cost_satang')) {
 }
 db.exec(paymentQrSchema);
 
-if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='matches'").get()) {
-  if (databasePath !== ':memory:') {
-    const backup = resolve(databasePath) + '.before-ranking-' + Date.now() + '-' + randomUUID() + '.sqlite';
-    db.prepare('VACUUM INTO ?').run(backup);
-    console.log('SQLite backup created before ranking migration: ' + backup);
-  }
-  atomic(() => db.exec(`CREATE TABLE matches (
+const matchesSchema = `CREATE TABLE matches (
     id TEXT PRIMARY KEY, event_id TEXT NOT NULL REFERENCES events(id),
     player1 TEXT NOT NULL REFERENCES members(id), player2 TEXT NOT NULL REFERENCES members(id),
     player3 TEXT NOT NULL REFERENCES members(id), player4 TEXT NOT NULL REFERENCES members(id),
@@ -139,8 +133,27 @@ if (!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='matche
     version INTEGER NOT NULL DEFAULT 1, voided INTEGER NOT NULL DEFAULT 0 CHECK(voided IN (0,1)),
     UNIQUE(event_id, created_by, request_id),
     CHECK(player1<>player2 AND player1<>player3 AND player1<>player4 AND player2<>player3 AND player2<>player4 AND player3<>player4),
-    CHECK((score_a=4 AND score_b BETWEEN 0 AND 2) OR (score_b=4 AND score_a BETWEEN 0 AND 2) OR (score_a=3 AND score_b=3))
-  ); CREATE INDEX matches_event ON matches(event_id, created_at);`));
+    CHECK((score_a=4 AND score_b BETWEEN 0 AND 2) OR (score_b=4 AND score_a BETWEEN 0 AND 2) OR (score_a=3 AND score_b=3) OR (score_a=6 AND score_b BETWEEN 0 AND 4) OR (score_b=6 AND score_a BETWEEN 0 AND 4) OR (score_a=5 AND score_b=5))
+  );`;
+const existingMatches = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='matches'").get();
+if (!existingMatches || !/score_a\s*=\s*6/.test(existingMatches.sql)) {
+  if (databasePath !== ':memory:') {
+    const migration = existingMatches ? 'six-game-scores' : 'ranking';
+    const backup = resolve(databasePath) + '.before-' + migration + '-' + Date.now() + '-' + randomUUID() + '.sqlite';
+    db.prepare('VACUUM INTO ?').run(backup);
+    console.log('SQLite backup created before ' + migration + ' migration: ' + backup);
+  }
+  atomic(() => {
+    if (existingMatches) {
+      const count = db.prepare('SELECT COUNT(*) AS n FROM matches').get().n;
+      db.exec(matchesSchema.replace('CREATE TABLE matches', 'CREATE TABLE matches_six_games'));
+      db.exec('INSERT INTO matches_six_games SELECT * FROM matches; DROP TABLE matches; ALTER TABLE matches_six_games RENAME TO matches;');
+      if (db.prepare('SELECT COUNT(*) AS n FROM matches').get().n !== count) throw new Error('Six-game score migration changed match row count');
+      console.log('Six-game score migration preserved matches: ' + count);
+    } else db.exec(matchesSchema);
+    db.exec('CREATE INDEX matches_event ON matches(event_id, created_at);');
+    if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Match migration failed foreign key check');
+  });
 }
 
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -303,7 +316,7 @@ function matchFields(data, id) {
   const eligible = new Set(matchPlayers(id).map(p => p.id));
   if (players.some(id => !eligible.has(id))) fail(400, 'เลือกสมาชิกที่มีบัญชีและมีชื่อในนัดนี้เท่านั้น');
   const a = data.scoreA, b = data.scoreB;
-  if (!Number.isInteger(a) || !Number.isInteger(b) || !((a === 4 && b >= 0 && b <= 2) || (b === 4 && a >= 0 && a <= 2) || (a === 3 && b === 3))) fail(400, 'เลือกสกอร์ 4–0, 4–1, 4–2 หรือ 3–3');
+  if (!Number.isInteger(a) || !Number.isInteger(b) || !((a === 4 && b >= 0 && b <= 2) || (b === 4 && a >= 0 && a <= 2) || (a === 3 && b === 3) || (a === 6 && b >= 0 && b <= 4) || (b === 6 && a >= 0 && a <= 4) || (a === 5 && b === 5))) fail(400, 'เลือกสกอร์ชนะ 4–0 ถึง 4–2 หรือ 6–0 ถึง 6–4 หรือเสมอ 3–3 / 5–5');
   const teams = [{ players: players.slice(0, 2).sort(), score: a }, { players: players.slice(2).sort(), score: b }].sort((x, y) => x.players.join(',').localeCompare(y.players.join(',')));
   return { players, a, b, signature: JSON.stringify(teams) };
 }
@@ -433,7 +446,7 @@ export async function handleRequest(req, res) {
       const rows = db.prepare(`SELECT e.*, m.nickname AS organizer_name, COUNT(r.sequence) AS total
         FROM events e JOIN members m ON m.id = e.organizer_id
         LEFT JOIN registrations r ON r.event_id = e.id
-        GROUP BY e.id ORDER BY e.date, e.start, e.id`).all();
+        GROUP BY e.id ORDER BY e.date DESC, e.start DESC, e.id`).all();
       return send(res, 200, { events: rows.map(row => eventView(row, member)) });
     }
     if (req.method === 'POST' && path === '/api/events') {
