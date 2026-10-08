@@ -72,7 +72,7 @@ Vite สร้างไฟล์ใน `dist/` ซึ่งไม่เก็บ
 2. ลงชื่อเข้า [LINE Developers Console](https://developers.line.biz/console/) สร้างหรือเลือก provider และ LINE Login channel สำหรับเว็บ แล้วจด **Channel ID**
 3. ที่ channel เปิดแท็บ **LIFF → Add** ตั้งชื่อ `SKS Tennis Club`, ขนาด `Full`, Endpoint URL เป็น URL ของเว็บพร้อม `/` และ scopes `openid`, `profile` แล้วจด **LIFF ID** ไม่ต้องขอ email หรือส่งข้อความเข้าห้องแชตอัตโนมัติ ดูรายละเอียดใน [คู่มือเพิ่ม LIFF](https://developers.line.biz/en/docs/liff/registering-liff-apps/)
 4. เปิดใช้ **Share target picker** และยอมรับเงื่อนไขของฟังก์ชันนี้ใน LIFF settings ตาม [คู่มือแชร์ของ LINE](https://developers.line.biz/en/docs/liff/developing-liff-apps/#sending-messages-to-a-users-friend-share-target-picker)
-5. คัดลอก `.env.example` เป็น `.env` เติม `LINE_LOGIN_CHANNEL_ID`, `LINE_LIFF_ID`, `SKS_ORIGIN` ให้ตรงกับโดเมนจริง และสร้าง `SKS_INVITE_CODE` แบบสุ่มอย่างน้อย 24 ตัวอักษร เก็บค่านี้ใน `.env` ของเซิร์ฟเวอร์ ไม่ต้องใช้ Channel Secret
+5. คัดลอก `.env.example` เป็น `.env` เติม `LINE_LOGIN_CHANNEL_ID`, `LINE_LIFF_ID`, `SKS_ORIGIN` ให้ตรงกับโดเมนจริง และสร้าง `SKS_INVITE_CODE` แบบสุ่มอย่างน้อย 24 ตัวอักษร เก็บค่านี้ใน `.env` ของเซิร์ฟเวอร์ การล็อกอินผ่าน LIFF ไม่ต้องใช้ Channel Secret
 6. ตั้ง `SKS_DATABASE_PATH` เป็นตำแหน่งไฟล์บนดิสก์ถาวร และ `SKS_PORT`/`SKS_BIND_ADDRESS` ตามโฮสต์ หากผ่าน reverse proxy ต้องรักษา Origin header ของเบราว์เซอร์ไว้ แล้ว restart เซิร์ฟเวอร์
 7. ทดสอบกับบัญชีผู้ดูแล/ผู้ทดสอบก่อน เมื่อพร้อมให้สมาชิกทั่วไปเข้าได้จึงเปลี่ยน LINE Login channel เป็น Published ตาม [ข้อกำหนดผู้ใช้ของ LINE](https://developers.line.biz/en/docs/line-login/managing-users/)
 
@@ -83,6 +83,23 @@ Vite สร้างไฟล์ใน `dist/` ซึ่งไม่เก็บ
 ```sh
 node -e "console.log(require('node:crypto').randomBytes(24).toString('base64url'))"
 ```
+
+## แจ้งเตือนนัดผ่าน SKS OA
+
+แจ้งเข้ากลุ่มที่กำหนดเพียงสองเหตุการณ์: สร้างนัดสำเร็จหนึ่งครั้ง และคนเต็มครั้งแรกอีกหนึ่งครั้งต่อนัด รวมการลงชื่อเอง ผู้จัดเพิ่มสมาชิก/ชื่อที่ยังไม่มีบัญชี และการลดจำนวนที่รับจนพอดีกับรายชื่อ แจ้งคนเต็มเพียงครั้งเดียวแม้ถอนแล้วกลับมาเต็มอีก ไม่แจ้งการแก้ข้อมูลทั่วไป คิวสำรอง การถอนชื่อ การจ่ายเงิน ผลแมตช์ หรือการยกเลิก
+
+1. ใน **Messaging API channel** ของ SKS ออก Channel access token แล้วตั้ง `LINE_MESSAGING_CHANNEL_ACCESS_TOKEN` ใน Railway Variables หรือ `.env` ของเซิร์ฟเวอร์
+2. คัดลอก Channel secret จาก **Basic settings** ของ channel เดียวกันไปที่ `LINE_MESSAGING_CHANNEL_SECRET` ค่าทั้งสองอยู่ฝั่งเซิร์ฟเวอร์เท่านั้น ไม่ใช้ค่าจาก LINE Login channel
+3. Deploy โค้ดนี้ก่อน แล้วตั้ง Webhook URL เป็น `https://sks-tennis-club-production.up.railway.app/api/line/webhook` กด Verify และเปิด Use webhook
+4. เปิด **Allow bot to join group chats** แล้วเชิญ SKS OA เข้ากลุ่มที่จะรับแจ้งเตือน พิมพ์ข้อความหนึ่งครั้งในกลุ่ม ดู Railway logs จะพบ `LINE group ID: C...` Webhook ตรวจลายเซ็นก่อนอ่านข้อมูลและไม่ตอบแชต
+5. ตั้ง `LINE_NOTIFY_GROUP_ID` เป็น ID ของกลุ่มนั้น แล้ว restart/deploy ใหม่ การเชิญ OA เข้ากลุ่มอื่นไม่เปิดแจ้งเตือนให้กลุ่มนั้นอัตโนมัติ
+6. สร้างนัดทดสอบ ตรวจการ์ดโทนกรมท่า/ครีม/เขียวใบไม้ และปุ่มเปิด LIFF ตรงนัด จากนั้นลงชื่อจนเต็ม ต้องได้แจ้งเตือนอีกครั้ง ลองกดซ้ำ ลงสำรอง ถอนแล้วเต็มใหม่ และ restart ต้องไม่ส่งซ้ำ การเด้งบนมือถือขึ้นกับการเปิดแจ้งเตือน LINE และการไม่ปิดเสียงกลุ่มของผู้รับ
+
+ระบบเก็บข้อความรอส่งและสถานะใน SQLite พร้อมกับการบันทึกนัด/รายชื่อ ส่งหลังบันทึกสำเร็จ จึงไม่ทำให้การสร้างนัดหรือลงชื่อล้มเหลวเมื่อ LINE ขัดข้อง หากเครือข่ายหรือ LINE มีปัญหา จะลองใหม่พร้อม retry key เดิมภายใน 23 ชั่วโมงเพื่อป้องกันข้อความซ้ำ หลังจากนั้นหรือเมื่อ LINE ปฏิเสธด้วย 4xx จะหยุดและบันทึกเหตุผลใน server logs ดู [แนวทาง retry ของ LINE](https://developers.line.biz/en/docs/messaging-api/retrying-api-request/)
+
+ถ้าไม่ได้ตั้ง token และ group ID จะไม่ส่งหรือสะสมแจ้งเตือนย้อนหลัง ตั้งค่าครบแล้วจึงเริ่มแจ้งเหตุการณ์ใหม่ แต่ข้อความที่เคยรอส่งยังอยู่และจะส่งตาม payload/กลุ่มเดิมเมื่อเปิดเซิร์ฟเวอร์อีกครั้ง ระบบใช้ SQLite กับแอปหนึ่ง instance ตามข้อจำกัดเดิม
+
+โควตา push นับตามจำนวนผู้รับในกลุ่ม เช่นกลุ่ม 10 คน การส่งสองครั้งนับเป็น 20 ข้อความ ไม่ใช่ 2 ข้อความ และถ้าโควตาเดือนนั้นหมด LINE จะปฏิเสธการส่ง ดู [การนับข้อความและราคา](https://developers.line.biz/en/docs/messaging-api/pricing/)
 
 ## ตรวจรับก่อนแชร์ให้กลุ่ม
 

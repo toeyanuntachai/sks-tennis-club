@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { randomBytes, randomUUID, createHash, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { lineNotifications } from './line-notifications.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const origin = new URL(process.env.SKS_ORIGIN || 'http://127.0.0.1:4317').origin;
@@ -15,6 +16,7 @@ const channelId = process.env.LINE_LOGIN_CHANNEL_ID || '';
 const liffId = process.env.LINE_LIFF_ID || '';
 const inviteCode = process.env.SKS_INVITE_CODE || '';
 const ready = Boolean(channelId && liffId && inviteCode.length >= 24);
+const messagingSecret = process.env.LINE_MESSAGING_CHANNEL_SECRET || '';
 const databasePath = process.env.SKS_DATABASE_PATH || resolve(root, 'data/sks.sqlite');
 if (databasePath !== ':memory:') mkdirSync(dirname(resolve(databasePath)), { recursive: true });
 // ponytail: synchronous SQLite suits this one small group; move to a shared database before running multiple app servers.
@@ -157,6 +159,15 @@ if (!existingMatches || !/score_a\s*=\s*6/.test(existingMatches.sql)) {
 }
 
 const digest = value => createHash('sha256').update(value).digest('hex');
+const notifications = lineNotifications(db, {
+  token: process.env.LINE_MESSAGING_CHANNEL_ACCESS_TOKEN || '',
+  groupId: process.env.LINE_NOTIFY_GROUP_ID || '', liffId, inviteCode
+});
+// Called inside the same transaction as the roster/capacity change.
+function notifyFull(id, member, before) {
+  const after = eventRow(id);
+  if (!before.cancelled && before.total < before.capacity && after.total >= after.capacity) notifications.enqueue(detail(id, member), 'full');
+}
 function fail(status, message, code) { throw Object.assign(new Error(message), { status, code }); }
 function atomic(work) {
   db.exec('BEGIN IMMEDIATE');
@@ -193,6 +204,32 @@ async function body(req, limit = 16384) {
     if (error.status) throw error;
     fail(400, 'ข้อมูลไม่ถูกต้อง');
   }
+}
+async function lineWebhook(req, res) {
+  if (!messagingSecret) fail(503, 'ยังไม่ได้ตั้งค่า LINE Webhook');
+  const chunks = [];
+  let bytes = 0;
+  for await (const chunk of req) {
+    bytes += Buffer.byteLength(chunk);
+    if (bytes > 1024 * 1024) fail(413, 'ข้อมูลยาวเกินไป');
+    chunks.push(Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks);
+  const signature = req.headers['x-line-signature'];
+  const expected = Buffer.from(createHmac('sha256', messagingSecret).update(raw).digest('base64'));
+  const supplied = typeof signature === 'string' ? Buffer.from(signature) : Buffer.alloc(0);
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) fail(401, 'LINE signature ไม่ถูกต้อง');
+  let payload;
+  try { payload = JSON.parse(raw.toString('utf8')); }
+  catch { fail(400, 'ข้อมูลไม่ถูกต้อง'); }
+  if (!payload || !Array.isArray(payload.events)) fail(400, 'ข้อมูลไม่ถูกต้อง');
+  for (const event of payload.events) {
+    if (event?.source?.type === 'group' && /^C[0-9a-f]{32}$/.test(event.source.groupId) && ['join', 'message'].includes(event.type)) {
+      // An operator explicitly chooses this ID in server settings; joining another group never subscribes it.
+      console.log('LINE group ID:', event.source.groupId);
+    }
+  }
+  return send(res, 200, { ok: true });
 }
 function text(value, label, max) {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > max || /[\u0000-\u001f\u007f]/.test(value)) fail(400, label + 'ไม่ถูกต้อง');
@@ -396,6 +433,7 @@ export async function handleRequest(req, res) {
   try {
     const url = new URL(req.url, origin);
     const path = url.pathname;
+    if (req.method === 'POST' && path === '/api/line/webhook') return await lineWebhook(req, res);
     // Only serve Vite's flat JS/CSS assets, never arbitrary paths or /api fallbacks.
     const asset = path.match(/^\/assets\/([A-Za-z0-9_-]+\.(js|css))$/);
     const staticFile = Object.hasOwn(staticFiles, path) ? staticFiles[path] : asset ? ['dist/assets/' + asset[1], asset[2] === 'js' ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8'] : null;
@@ -455,7 +493,9 @@ export async function handleRequest(req, res) {
         db.prepare(`INSERT INTO events(id, organizer_id, title, venue, date, start, end, courts, court_names, capacity, court_cost_satang, ball_cost_satang)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, member.id, fields.title, fields.venue, fields.date, fields.start, fields.end, fields.courts, fields.courtNames, fields.capacity, payment.courtCostSatang, payment.ballCostSatang);
         savePaymentQr(id, payment.qr);
+        notifications.enqueue(detail(id, member), 'created');
       });
+      void notifications.flush();
       return send(res, 201, { event: detail(id, member) });
     }
     const match = path.match(/^\/api\/events\/([^/]+)(?:\/(signup|cancel|payment|payment-qr|available-members|participants|matches)(?:\/([^/]+))?)?$/);
@@ -523,6 +563,7 @@ export async function handleRequest(req, res) {
       const data = await body(req);
       atomic(() => {
         organizerEvent();
+        const before = eventRow(id);
         if (req.method === 'POST' && !participantId && action === 'participants') {
           if (['memberId', 'memberIds', 'nickname'].filter(key => Object.hasOwn(data, key)).length !== 1) fail(400, 'เลือกสมาชิกหรือพิมพ์ชื่ออย่างใดอย่างหนึ่ง');
           let memberIds;
@@ -570,7 +611,9 @@ export async function handleRequest(req, res) {
             }
           }
         } else fail(404, 'ไม่พบข้อมูลนี้');
+        if (req.method === 'POST') notifyFull(id, member, before);
       });
+      void notifications.flush();
       return send(res, 200, { event: detail(id, member) });
     }
     if (req.method === 'PATCH' && action === 'payment') {
@@ -604,7 +647,9 @@ export async function handleRequest(req, res) {
         db.prepare('UPDATE events SET title=?, venue=?, date=?, start=?, end=?, courts=?, court_names=?, capacity=?, court_cost_satang=?, ball_cost_satang=? WHERE id=?')
           .run(fields.title, fields.venue, fields.date, fields.start, fields.end, fields.courts, fields.courtNames, fields.capacity, payment.courtCostSatang, payment.ballCostSatang, id);
         savePaymentQr(id, payment.qr);
+        notifyFull(id, member, event);
       });
+      void notifications.flush();
       return send(res, 200, { event: detail(id, member) });
     }
     if (req.method === 'POST' && action === 'cancel') {
@@ -618,10 +663,12 @@ export async function handleRequest(req, res) {
     if ((req.method === 'POST' || req.method === 'DELETE') && action === 'signup') {
       await body(req);
       atomic(() => {
-        if (eventRow(id).cancelled) fail(409, 'นัดนี้ยกเลิกแล้ว');
+        const before = eventRow(id);
+        if (before.cancelled) fail(409, 'นัดนี้ยกเลิกแล้ว');
         if (req.method === 'POST') {
           db.prepare('INSERT INTO registrations(event_id, member_id) VALUES (?, ?) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, member.id);
           db.prepare('INSERT INTO event_payments VALUES (?, ?, 0) ON CONFLICT(event_id, member_id) DO NOTHING').run(id, member.id);
+          notifyFull(id, member, before);
         } else {
           db.prepare(`INSERT INTO event_payments(event_id,member_id,paid)
             SELECT event_id,member_id,0 FROM registrations WHERE event_id=? AND member_id=?
@@ -629,6 +676,7 @@ export async function handleRequest(req, res) {
           db.prepare('DELETE FROM registrations WHERE event_id = ? AND member_id = ?').run(id, member.id);
         }
       });
+      void notifications.flush();
       return send(res, 200, { event: detail(id, member) });
     }
     fail(404, 'ไม่พบข้อมูลนี้');
@@ -644,5 +692,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   createServer(handleRequest).listen(port, address, () => {
     console.log('SKS Tennis Club is running at ' + origin);
     if (!ready) console.log('LINE settings are incomplete. See .env.example and README.md.');
+    void notifications.flush();
+    setInterval(() => { void notifications.flush(); }, 30000).unref();
   });
 }
