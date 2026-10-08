@@ -89,7 +89,10 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   assert.deepEqual(event.withdrawn,[]);
   const payment=path+'/payment';
   assert.equal((await request('PATCH',payment,'',{memberId:bob.id,paid:true})).status,401);
-  assert.equal((await request('PATCH',payment,bob.cookie,{memberId:bob.id,paid:true})).status,403);
+  assert.equal((await request('PATCH',payment,bob.cookie,{memberId:cara.id,paid:true})).status,403);
+  assert.equal((await request('PATCH',payment,dan.cookie,{memberId:dan.id,paid:true})).status,404);
+  event=(await request('PATCH',payment,bob.cookie,{memberId:bob.id,paid:true})).data.event;
+  assert.equal(event.waitlist.find(p=>p.id===bob.id).paid,true);
   assert.equal((await request('PATCH',payment,alice.cookie,{memberId:bob.id,paid:'true'})).status,400);
   assert.equal((await request('PATCH',payment,alice.cookie,{memberId:dan.id,paid:true})).status,404);
   assert.equal((await request('PATCH',payment,alice.cookie,{memberId:bob.id,paid:true},'https://other.example')).status,403);
@@ -100,14 +103,16 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   const otherEvent=(await request('POST','/api/events',bob.cookie,fields)).data.event;
   await request('POST','/api/events/'+otherEvent.id+'/signup',bob.cookie,{});
   assert.equal((await request('GET','/api/events/'+otherEvent.id,bob.cookie)).data.event.participants[0].paid,false);
-  assert.equal((await request('PATCH',payment,bob.cookie,{memberId:bob.id,paid:false})).status,403);
+  event=(await request('PATCH',payment,bob.cookie,{memberId:bob.id,paid:false})).data.event;
+  assert.equal(event.waitlist.find(p=>p.id===bob.id).paid,false);
+  await request('PATCH',payment,bob.cookie,{memberId:bob.id,paid:true});
   assert.equal((await request('GET',path,bob.cookie)).data.event.myPosition,2);
   await request('DELETE',signup,bob.cookie,{});
   event=(await request('GET',path,alice.cookie)).data.event;
   assert.deepEqual(event.participants.map(p=>p.id),[alice.id]);
   assert.deepEqual(event.waitlist.map(p=>p.id),[cara.id]);
   assert.deepEqual(event.withdrawn,[{id:bob.id,nickname:'เมย์',isGuest:false,paid:true}]);
-  event=(await request('PATCH',payment,alice.cookie,{memberId:bob.id,paid:false})).data.event;
+  event=(await request('PATCH',payment,bob.cookie,{memberId:bob.id,paid:false})).data.event;
   assert.equal(event.withdrawn[0].paid,false);
   await request('PATCH',payment,alice.cookie,{memberId:bob.id,paid:true});
   await request('POST',signup,bob.cookie,{});
@@ -123,6 +128,10 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   event=(await request('GET',path,alice.cookie)).data.event;
   assert.equal(event.confirmed+event.waiting,3);
   assert.deepEqual(event.participants.map(p=>p.id),[cara.id]);
+  event=(await request('PATCH',payment,cara.cookie,{memberId:cara.id,paid:true})).data.event;
+  assert.equal(event.participants[0].paid,true);
+  event=(await request('PATCH',payment,cara.cookie,{memberId:cara.id,paid:false})).data.event;
+  assert.equal(event.participants[0].paid,false);
   assert.equal((await request('PATCH',path,bob.cookie,{...fields,capacity:2})).status,403);
   assert.equal((await request('POST',path+'/cancel',bob.cookie,{})).status,403);
   event=(await request('PATCH',path,alice.cookie,{...fields,capacity:2})).data.event;
@@ -134,6 +143,7 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   assert.equal((await request('POST',signup,dan.cookie,{})).status,409);
   assert.equal((await request('DELETE',signup,cara.cookie,{})).status,409);
   assert.equal((await request('PATCH',payment,alice.cookie,{memberId:bob.id,paid:false})).status,409);
+  assert.equal((await request('PATCH',payment,bob.cookie,{memberId:bob.id,paid:false})).status,409);
   event=(await request('GET',path,alice.cookie)).data.event;
   assert.equal(event.cancelled,true);
   assert.equal(event.confirmed+event.waiting,3);
@@ -180,6 +190,7 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   await request('POST',people,alice.cookie,{memberId:bob.id});
   let roster=(await request('POST',people,alice.cookie,{nickname:'เพื่อนใหม่'})).data.event;
   const guest=roster.participants[1];
+  assert.equal((await request('PATCH',rosterPath+'/payment',bob.cookie,{memberId:guest.id,paid:true})).status,403);
   assert.equal(guest.isGuest,true);assert.equal(guest.paid,false);
   assert.equal(roster.participants[0].isGuest,false);
   await request('POST',people,alice.cookie,{memberId:cara.id});

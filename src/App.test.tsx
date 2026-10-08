@@ -54,7 +54,8 @@ test('shared event is read after LIFF normalizes the URL; member names remain te
   await screen.findByRole('heading', { name: 'นัดที่แชร์' });
   expect(calls).toEqual(['/api/config', 'init', '/api/me', '/api/events/e', '/api/events/e/matches']);
   expect(screen.getByRole('button', { name: 'ถอนชื่อของฉัน' })).toBeTruthy();
-  expect(screen.queryByRole('checkbox')).toBeNull();
+  expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+  expect(screen.getByRole('checkbox', { name: 'จ่ายแล้ว: ' + guest.nickname })).toBeTruthy();
   expect(screen.queryByRole('button', { name: '+ เพิ่มรายชื่อ' })).toBeNull();
   expect(screen.queryByRole('button', { name: 'แก้ไขนัด' })).toBeNull();
   expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeTruthy();
@@ -243,6 +244,38 @@ test('failed payment leaves the checkbox unchanged; successful response updates 
   await waitFor(() => expect(checkbox.getAttribute('aria-checked')).toBe('false'));
   expect(screen.getByText('ปัดขึ้นเป็นบาท · ส่วนเกินรวม 2 บาท')).toBeTruthy();
   expect(screen.getByText('หารผู้ได้ที่ในนัด 3 คน')).toBeTruthy();
+});
+
+test.each(['participants', 'waitlist', 'withdrawn'] as const)('members can update only their own payment in %s and retry a failed save', async roster => {
+  const self = { ...owner, isGuest: false, paid: false };
+  const event = detail({ isOrganizer: false, [roster]: [guest, self] });
+  let fail = true;
+  const requests = backend(event, ({ path, data }) => {
+    if (path.endsWith('/payment')) return fail
+      ? Response.json({ message: 'บันทึกของฉันไม่สำเร็จ' }, { status: 500 })
+      : Response.json({ event: { ...event, [roster]: [guest, { ...self, paid: data.paid }] } });
+  });
+  const user = userEvent.setup(); render(<App />);
+  const checkbox = await screen.findByRole('checkbox', { name: 'จ่ายแล้ว: ' + owner.nickname });
+  expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+  expect(screen.queryByRole('button', { name: '+ เพิ่มรายชื่อ' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'แก้ไขนัด' })).toBeNull();
+  await user.click(checkbox);
+  await screen.findByText('บันทึกของฉันไม่สำเร็จ');
+  expect(checkbox.getAttribute('aria-checked')).toBe('false');
+  fail = false; await user.click(checkbox);
+  await waitFor(() => expect(checkbox.getAttribute('aria-checked')).toBe('true'));
+  expect(requests.filter(r => r.method === 'PATCH').at(-1)).toMatchObject({ path: '/api/events/e/payment', data: { memberId: owner.id, paid: true } });
+  await user.click(checkbox);
+  await waitFor(() => expect(checkbox.getAttribute('aria-checked')).toBe('false'));
+  expect(requests.filter(r => r.method === 'PATCH').at(-1)?.data).toEqual({ memberId: owner.id, paid: false });
+});
+
+test('members cannot edit their own payment in a cancelled event', async () => {
+  backend(detail({ isOrganizer: false, cancelled: true, participants: [{ ...owner, isGuest: false, paid: true }] }));
+  render(<App />); await screen.findByRole('heading', { name: 'นัดที่แชร์' });
+  expect(screen.getByText('คุณ')).toBeTruthy();
+  expect(screen.queryByRole('checkbox')).toBeNull();
 });
 
 test('cancelled event keeps QR, costs and paid history visible while editing commands are absent', async () => {

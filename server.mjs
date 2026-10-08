@@ -579,7 +579,7 @@ export async function handleRequest(req, res) {
       if (typeof data.paid !== 'boolean') fail(400, 'สถานะจ่ายเงินไม่ถูกต้อง');
       atomic(() => {
         const event = eventRow(id);
-        if (event.organizer_id !== member.id) fail(403, 'เฉพาะผู้สร้างนัดเท่านั้นที่เปลี่ยนสถานะจ่ายเงินได้');
+        if (event.organizer_id !== member.id && memberId !== member.id) fail(403, 'เปลี่ยนสถานะจ่ายเงินได้เฉพาะของตัวเองหรือเป็นผู้สร้างนัด');
         if (event.cancelled) fail(409, 'นัดนี้ยกเลิกแล้ว');
         const registered = db.prepare('SELECT 1 FROM registrations WHERE event_id = ? AND member_id = ?').get(id, memberId);
         const payment = db.prepare('SELECT 1 FROM event_payments WHERE event_id = ? AND member_id = ?').get(id, memberId);
