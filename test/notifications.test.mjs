@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-test('OA only announces event creation and the first full roster, with signed webhook setup', async t => {
+test('OA announces creation once and each not-full to full transition, with signed webhook setup', async t => {
   const origin = 'https://club.example', invite = 'test-invite-' + 'a'.repeat(24);
   const groupId = 'C' + 'a'.repeat(32), secret = 'test-only-secret';
   const databasePath = join(mkdtempSync(join(tmpdir(), 'sks-notify-')), 'club.sqlite');
@@ -66,16 +66,22 @@ test('OA only announces event creation and the first full roster, with signed we
   assert.equal(pushes.length, 2);
   assert.match(pushes[1].messages[0].altText, /^คนเต็มแล้ว:/);
   await request('POST', path + '/signup', cara.cookie, {}); // Waitlist and its promotion stay quiet.
+  assert.equal(pushes.length, 2);
   await request('DELETE', path + '/signup', bob.cookie, {});
+  assert.equal(pushes.length, 2);
   await request('DELETE', path + '/signup', cara.cookie, {});
+  assert.equal(pushes.length, 2);
   await request('POST', path + '/signup', bob.cookie, {}); // Full a second time.
+  assert.equal(pushes.length, 3);
+  assert.match(pushes.at(-1).messages[0].altText, /^คนเต็มแล้ว:/);
+  await request('POST', path + '/signup', bob.cookie, {});
   await request('PATCH', path + '/payment', alice.cookie, { memberId: alice.id, paid: true });
   await request('PATCH', path, alice.cookie, { ...fields, title: 'แก้ชื่อ' });
   await request('GET', path, alice.cookie);
-  assert.equal(pushes.length, 2);
+  assert.equal(pushes.length, 3);
   await request('POST', path + '/cancel', alice.cookie, {});
   assert.equal((await request('POST', path + '/signup', cara.cookie, {})).status, 409);
-  assert.equal(pushes.length, 2);
+  assert.equal(pushes.length, 3);
 
   const roster = '/api/events/' + (await request('POST', '/api/events', alice.cookie, fields)).data.event.id;
   const beforeBatch = pushes.length;
@@ -96,7 +102,7 @@ test('OA only announces event creation and the first full roster, with signed we
   assert.equal(pushes.length, beforeReduction + 1);
   await request('PATCH', reduced, alice.cookie, { ...fields, capacity: 3 });
   await request('POST', reduced + '/signup', cara.cookie, {});
-  assert.equal(pushes.length, beforeReduction + 1);
+  assert.equal(pushes.length, beforeReduction + 2);
 
   // LINE failures must never turn a committed event/signup into a failed API request.
   pushStatus = 503;

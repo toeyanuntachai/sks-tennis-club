@@ -26,7 +26,7 @@ test('notifications are opt-in and use only an explicitly configured group', asy
   assert.throws(() => lineNotifications(db, { ...settings, groupId: 'U' + 'a'.repeat(32) }), /group ID/);
 });
 
-test('each event has two themed notifications at most, even after reinitializing', async t => {
+test('creation is deduplicated while each full transition gets a new notification, even after reinitializing', async t => {
   const { db, notifications } = setup(t);
   const calls = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -43,7 +43,7 @@ test('each event has two themed notifications at most, even after reinitializing
   const restarted = lineNotifications(db, settings);
   restarted.enqueue(event, 'full');
   await restarted.flush();
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.equal(calls[0].to, settings.groupId);
   assert.equal(calls[0].notificationDisabled, false);
   assert.equal(calls[0].messages[0].altText, 'เปิดนัดใหม่: นัดเย็น');
@@ -55,7 +55,35 @@ test('each event has two themed notifications at most, even after reinitializing
   const link = new URL(message.contents.footer.contents[0].action.uri);
   assert.equal(link.searchParams.get('event'), event.id);
   assert.equal(link.searchParams.get('invite'), settings.inviteCode);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM line_notifications WHERE status='sent'").get().n, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM line_notifications WHERE status='sent'").get().n, 3);
+  const fullKeys = db.prepare("SELECT retry_key FROM line_notifications WHERE kind='full'").all();
+  assert.notEqual(fullKeys[0].retry_key, fullKeys[1].retry_key);
+});
+
+test('legacy queues preserve every payload, retry key and delivery state when allowing full notifications again', t => {
+  const db = new DatabaseSync(':memory:');
+  t.after(() => db.close());
+  db.exec(`CREATE TABLE events(id TEXT PRIMARY KEY);
+    INSERT INTO events VALUES ('event'), ('second');
+    CREATE TABLE line_notifications (
+      event_id TEXT NOT NULL REFERENCES events(id), kind TEXT NOT NULL CHECK(kind IN ('created', 'full')),
+      retry_key TEXT NOT NULL UNIQUE, payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed')),
+      first_attempt_at INTEGER, next_attempt_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(event_id, kind)
+    );`);
+  const insert = db.prepare('INSERT INTO line_notifications VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  insert.run('event', 'created', 'created-key', '{"sent":true}', 'sent', 100, 0, 1);
+  insert.run('event', 'full', 'full-key', '{"pending":true}', 'pending', 200, 300, 2);
+  insert.run('second', 'created', 'failed-key', '{"failed":true}', 'failed', 400, 0, 1);
+  const before = db.prepare('SELECT * FROM line_notifications ORDER BY retry_key').all();
+  const notifications = lineNotifications(db, settings);
+  assert.deepEqual(db.prepare('SELECT * FROM line_notifications ORDER BY retry_key').all(), before);
+  notifications.enqueue(event, 'created');
+  notifications.enqueue(event, 'full');
+  lineNotifications(db, settings).enqueue(event, 'created');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM line_notifications').get().n, 4);
+  assert.deepEqual(db.prepare('SELECT * FROM line_notifications WHERE retry_key IN (?, ?, ?) ORDER BY retry_key').all('created-key', 'full-key', 'failed-key'), before);
 });
 
 test('network failures survive restart and reuse the exact payload and retry key', async t => {
@@ -109,10 +137,22 @@ test('server errors retry within the key window but expired retries never send',
   assert.equal(db.prepare('SELECT status FROM line_notifications').get().status, 'failed');
 });
 
+test('full notifications show all 24 participants in order, including long nicknames', t => {
+  const { db, notifications } = setup(t);
+  const participants = Array.from({ length: 24 }, (_, i) => ({ nickname: String(i + 1).padStart(2, '0') + 'ช'.repeat(38) }));
+  notifications.enqueue({ ...event, capacity: 24, confirmed: 24, participants }, 'full');
+  const payload = JSON.parse(db.prepare('SELECT payload FROM line_notifications').get().payload);
+  const contents = payload.messages[0].contents.body.contents;
+  assert.equal(contents.at(-1).text, participants.map((person, i) => `${i + 1}. ${person.nickname}`).join('\n'));
+  assert.ok(Buffer.byteLength(JSON.stringify(payload.messages[0].contents)) < 30000);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM line_notifications').get().n, 1);
+});
+
 test('large rosters keep the Flex bubble under the LINE JSON size limit', async t => {
   const { db, notifications } = setup(t);
   notifications.enqueue({ ...event, capacity: 10000, confirmed: 10000, participants: Array.from({ length: 10000 }, () => ({ nickname: 'ช'.repeat(40) })) }, 'full');
   const payload = JSON.parse(db.prepare('SELECT payload FROM line_notifications').get().payload);
   assert.ok(Buffer.byteLength(JSON.stringify(payload.messages[0].contents)) < 30000);
   assert.match(JSON.stringify(payload), /ดูรายชื่อทั้งหมดในนัด/);
+  assert.ok(payload.messages[0].contents.body.contents.at(-2).text.split('\n').length > 24);
 });
