@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { createHmac } from 'node:crypto';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -38,7 +38,10 @@ test('OA announces creation once and each not-full to full transition, with sign
       setHeader(key, value) { result.headers[key.toLowerCase()] = value; },
       getHeader(key) { return result.headers[key.toLowerCase()]; },
       writeHead(status, headers) { result.status = status; for (const [key, value] of Object.entries(headers || {})) this.setHeader(key, value); },
-      end(value) { result.data = JSON.parse(value); }
+      end(value) {
+        result.bytes = Buffer.from(value);
+        if (result.headers['content-type']?.startsWith('application/json')) result.data = JSON.parse(value);
+      }
     };
     await handleRequest(req, res);
     await new Promise(resolve => setImmediate(resolve));
@@ -113,6 +116,57 @@ test('OA announces creation once and each not-full to full transition, with sign
   const persisted = new DatabaseSync(databasePath);
   t.after(() => persisted.close());
   assert.equal(persisted.prepare("SELECT COUNT(*) AS n FROM line_notifications WHERE event_id=? AND status='pending'").get(failedPush.data.event.id).n, 2);
+
+  // Bill only on full transitions; the signed image link grants access only to that QR version.
+  pushStatus = 200;
+  const png = readFileSync(new URL('../public/sks-logo.png', import.meta.url));
+  const billingFields = { ...fields, capacity: 3, courtCostSatang: 90000, ballCostSatang: 10000, paymentQr: png.toString('base64') };
+  const billingId = (await request('POST', '/api/events', alice.cookie, billingFields)).data.event.id;
+  const billingPath = '/api/events/' + billingId;
+  const beforeBilling = pushes.length;
+  await request('POST', billingPath + '/signup', alice.cookie, {});
+  await request('POST', billingPath + '/signup', bob.cookie, {});
+  assert.equal(pushes.length, beforeBilling);
+  const guest = (await request('POST', billingPath + '/participants', alice.cookie, { nickname: 'เพื่อน' })).data.event.participants[2];
+  assert.equal(pushes.length, beforeBilling + 1);
+  const bill = pushes.at(-1).messages[0];
+  assert.equal(pushes.at(-1).messages.length, 1);
+  assert.match(bill.altText, /^คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾:/);
+  assert.match(JSON.stringify(bill), /คนละ 334 บาท/);
+  assert.match(JSON.stringify(bill), /ค่าใช้จ่ายรวม 1,000 บาท ÷ ผู้ได้ที่ 3 คน/);
+  await request('POST', billingPath + '/signup', cara.cookie, {});
+  assert.equal(pushes.length, beforeBilling + 1);
+  const qrUrl = new URL(bill.contents.body.contents.find(component => component.type === 'image').url);
+  const imagePath = qrUrl.pathname + qrUrl.search;
+  const image = await request('GET', imagePath, '', undefined, { origin: undefined });
+  assert.equal(image.status, 200);
+  assert.equal(image.headers['content-type'], 'image/png');
+  assert.deepEqual(image.bytes, png);
+  assert.equal((await request('GET', billingPath + '/payment-qr')).status, 401);
+  assert.equal((await request('GET', qrUrl.pathname)).status, 403);
+  for (const key of ['signature', 'version', 'expires']) {
+    const tampered = new URL(qrUrl);
+    tampered.searchParams.set(key, key === 'expires' ? String(Number(qrUrl.searchParams.get(key)) + 1) : '0'.repeat(64));
+    assert.equal((await request('GET', tampered.pathname + tampered.search)).status, 403);
+  }
+  assert.equal((await request('GET', qrUrl.pathname.replace(billingId, created.data.event.id) + qrUrl.search)).status, 403);
+  const expired = new URL(qrUrl);
+  expired.searchParams.set('expires', String(Math.floor(Date.now() / 1000) - 1));
+  expired.searchParams.set('signature', createHmac('sha256', secret).update('payment-qr:' + billingId + ':' + expired.searchParams.get('version') + ':' + expired.searchParams.get('expires')).digest('hex'));
+  assert.equal((await request('GET', expired.pathname + expired.search)).status, 403);
+  const replacement = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  await request('PATCH', billingPath, alice.cookie, { ...billingFields, paymentQr: replacement.toString('base64') });
+  assert.equal((await request('GET', imagePath)).status, 404);
+  assert.equal(pushes.length, beforeBilling + 1);
+  await request('DELETE', billingPath + '/signup', cara.cookie, {});
+  await request('DELETE', billingPath + '/participants/' + guest.id, alice.cookie, {});
+  await request('PATCH', billingPath, alice.cookie, { ...fields, capacity: 2 });
+  assert.equal(pushes.length, beforeBilling + 2);
+  assert.match(JSON.stringify(pushes.at(-1)), /คนละ 500 บาท/);
+  const updatedQr = new URL(pushes.at(-1).messages[0].contents.body.contents.find(component => component.type === 'image').url);
+  assert.deepEqual((await request('GET', updatedQr.pathname + updatedQr.search)).bytes, replacement);
+  await request('PATCH', billingPath, alice.cookie, { ...fields, paymentQr: null });
+  assert.equal((await request('GET', updatedQr.pathname + updatedQr.search)).status, 404);
 
   // The webhook alone bypasses browser Origin/session checks, and authenticates raw bytes instead.
   const webhook = '/api/line/webhook';

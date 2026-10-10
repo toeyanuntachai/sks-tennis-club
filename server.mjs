@@ -166,7 +166,24 @@ const notifications = lineNotifications(db, {
 // Called inside the same transaction as the roster/capacity change.
 function notifyFull(id, member, before) {
   const after = eventRow(id);
-  if (!before.cancelled && before.total < before.capacity && after.total >= after.capacity) notifications.enqueue(detail(id, member), 'full');
+  if (!before.cancelled && before.total < before.capacity && after.total >= after.capacity) {
+    const event = detail(id, member);
+    if (event.sharePerPersonSatang !== null && messagingSecret && originUrl.protocol === 'https:') {
+      const qr = db.prepare('SELECT image FROM event_payment_qr WHERE event_id=?').get(id);
+      if (qr) {
+        const version = digest(qr.image), expires = String(Math.floor(Date.now() / 1000) + 7 * 86400);
+        const url = new URL('/api/line/payment-qr/' + encodeURIComponent(id), origin);
+        url.searchParams.set('version', version);
+        url.searchParams.set('expires', expires);
+        url.searchParams.set('signature', paymentQrSignature(id, version, expires));
+        event.paymentQrUrl = url.href;
+      }
+    }
+    notifications.enqueue(event, 'full');
+  }
+}
+function paymentQrSignature(id, version, expires) {
+  return createHmac('sha256', messagingSecret).update('payment-qr:' + id + ':' + version + ':' + expires).digest('hex');
 }
 function fail(status, message, code) { throw Object.assign(new Error(message), { status, code }); }
 function atomic(work) {
@@ -434,6 +451,20 @@ export async function handleRequest(req, res) {
     const url = new URL(req.url, origin);
     const path = url.pathname;
     if (req.method === 'POST' && path === '/api/line/webhook') return await lineWebhook(req, res);
+    const lineQr = path.match(/^\/api\/line\/payment-qr\/([^/]+)$/);
+    if (req.method === 'GET' && lineQr) {
+      const [, id] = lineQr;
+      const version = url.searchParams.get('version'), expires = url.searchParams.get('expires'), signature = url.searchParams.get('signature');
+      if (!messagingSecret || !/^[0-9a-f]{64}$/.test(version || '') || !/^[0-9a-f]{64}$/.test(signature || '')
+        || !/^\d{10}$/.test(expires || '') || Number(expires) <= Math.floor(Date.now() / 1000)) fail(403, 'ลิงก์รูป QR ไม่ถูกต้องหรือหมดอายุ');
+      const expected = Buffer.from(paymentQrSignature(id, version, expires), 'hex');
+      if (!timingSafeEqual(expected, Buffer.from(signature, 'hex'))) fail(403, 'ลิงก์รูป QR ไม่ถูกต้องหรือหมดอายุ');
+      const qr = db.prepare('SELECT image, mime_type FROM event_payment_qr WHERE event_id=?').get(id);
+      if (!qr || digest(qr.image) !== version) fail(404, 'รูป QR เปลี่ยนแล้ว กรุณาเปิดนัดเพื่อดูรูปปัจจุบัน');
+      res.writeHead(200, { 'Content-Type': qr.mime_type });
+      res.end(Buffer.from(qr.image));
+      return;
+    }
     // Only serve Vite's flat JS/CSS assets, never arbitrary paths or /api fallbacks.
     const asset = path.match(/^\/assets\/([A-Za-z0-9_-]+\.(js|css))$/);
     const staticFile = Object.hasOwn(staticFiles, path) ? staticFiles[path] : asset ? ['dist/assets/' + asset[1], asset[2] === 'js' ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8'] : null;

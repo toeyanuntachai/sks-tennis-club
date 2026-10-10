@@ -148,9 +148,30 @@ test('full notifications show all 24 participants in order, including long nickn
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM line_notifications').get().n, 1);
 });
 
+test('full cards collect the current per-person amount and include the QR in the same message', t => {
+  const { db, notifications } = setup(t);
+  const billing = { ...event, totalCostSatang: 120000, sharePeople: 2, sharePerPersonSatang: 60000, paymentQrUrl: 'https://club.example/api/line/payment-qr/example?signature=fictional' };
+  notifications.enqueue(billing, 'created');
+  notifications.enqueue(billing, 'full');
+  const messages = db.prepare('SELECT payload FROM line_notifications ORDER BY rowid').all().map(row => JSON.parse(row.payload).messages);
+  assert.equal(messages[1].length, 1);
+  const card = messages[1][0];
+  assert.equal(card.altText, 'คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾: นัดเย็น');
+  assert.match(JSON.stringify(card), /คนละ 600 บาท/);
+  assert.match(JSON.stringify(card), /ค่าใช้จ่ายรวม 1,200 บาท ÷ ผู้ได้ที่ 2 คน/);
+  assert.equal(card.contents.body.contents.find(component => component.type === 'image').url, billing.paymentQrUrl);
+  assert.equal(card.contents.footer.contents[0].action.label, 'เปิดนัด / ตรวจยอดล่าสุด');
+  assert.doesNotMatch(JSON.stringify(messages[0]), /คนละ|payment-qr/);
+  notifications.enqueue({ ...billing, sharePerPersonSatang: 0, totalCostSatang: 0, paymentQrUrl: undefined }, 'full');
+  const withoutQr = JSON.parse(db.prepare('SELECT payload FROM line_notifications ORDER BY rowid DESC LIMIT 1').get().payload).messages[0];
+  assert.match(JSON.stringify(withoutQr), /คนละ 0 บาท/);
+  assert.equal(withoutQr.contents.body.contents.some(component => component.type === 'image'), false);
+  assert.match(JSON.stringify(withoutQr), /เปิดนัดเพื่อดูช่องทางชำระเงิน/);
+});
+
 test('large rosters keep the Flex bubble under the LINE JSON size limit', async t => {
   const { db, notifications } = setup(t);
-  notifications.enqueue({ ...event, capacity: 10000, confirmed: 10000, participants: Array.from({ length: 10000 }, () => ({ nickname: 'ช'.repeat(40) })) }, 'full');
+  notifications.enqueue({ ...event, capacity: 10000, confirmed: 10000, totalCostSatang: 100000000, sharePeople: 10000, sharePerPersonSatang: 10000, paymentQrUrl: 'https://club.example/api/line/payment-qr/example?signature=' + 'a'.repeat(64), participants: Array.from({ length: 10000 }, () => ({ nickname: 'ช'.repeat(40) })) }, 'full');
   const payload = JSON.parse(db.prepare('SELECT payload FROM line_notifications').get().payload);
   assert.ok(Buffer.byteLength(JSON.stringify(payload.messages[0].contents)) < 30000);
   assert.match(JSON.stringify(payload), /ดูรายชื่อทั้งหมดในนัด/);

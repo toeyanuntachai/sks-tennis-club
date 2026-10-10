@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 
 function notificationMessage(event, kind, liffId, inviteCode) {
   const full = kind === "full";
-  const heading = full ? "คนเต็มแล้ว" : "เปิดนัดใหม่";
+  const billing = full && event.sharePerPersonSatang != null;
+  const heading = billing ? "คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾" : full ? "คนเต็มแล้ว" : "เปิดนัดใหม่";
+  const money = satang => new Intl.NumberFormat("th-TH", { maximumFractionDigits: 2 }).format(satang / 100);
   const url = new URL(
     "https://liff.line.me/" + encodeURIComponent(liffId) + "/",
   );
@@ -43,6 +45,20 @@ function notificationMessage(event, kind, liffId, inviteCode) {
       margin: "md",
     },
   ];
+  if (billing) {
+    contents.push(
+      { ...text("💰 คนละ " + money(event.sharePerPersonSatang) + " บาท", "#576B4F"), size: "xl", weight: "bold", margin: "md" },
+      text("ค่าใช้จ่ายรวม " + money(event.totalCostSatang) + " บาท ÷ ผู้ได้ที่ " + event.sharePeople + " คน", "#626F6A"),
+      text("ปัดขึ้นเป็นบาท ไม่รวมคิวสำรอง", "#626F6A"),
+    );
+    if (event.paymentQrUrl)
+      contents.push({ type: "image", url: event.paymentQrUrl, size: "full", aspectRatio: "1:1", aspectMode: "fit", margin: "md", action: { type: "uri", uri: url.href } });
+    else contents.push(text("เปิดนัดเพื่อดูช่องทางชำระเงิน", "#626F6A"));
+    contents.push(
+      text("เมื่อโอนแล้ว ให้ทำเครื่องหมาย “จ่ายแล้ว” ในระบบด้วยน้าาา 💚"),
+      text("หากจำนวนผู้ร่วมเปลี่ยน กรุณาตรวจยอดล่าสุดในนัดก่อนโอน", "#626F6A"),
+    );
+  }
   if (full) {
     const names = [];
     let rosterBytes = 0;
@@ -97,7 +113,7 @@ function notificationMessage(event, kind, liffId, inviteCode) {
             height: "sm",
             action: {
               type: "uri",
-              label: full ? "ดูรายชื่อ" : "เปิดนัด / ลงชื่อ",
+              label: billing ? "เปิดนัด / ตรวจยอดล่าสุด" : full ? "ดูรายชื่อ" : "เปิดนัด / ลงชื่อ",
               uri: url.href,
             },
           },
