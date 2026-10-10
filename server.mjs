@@ -249,6 +249,7 @@ async function lineWebhook(req, res) {
       // An operator explicitly chooses this ID in server settings; joining another group never subscribes it.
       console.log('LINE group ID:', event.source.groupId);
     }
+    await notifications.welcome(event);
   }
   return send(res, 200, { ok: true });
 }

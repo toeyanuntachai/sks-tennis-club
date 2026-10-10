@@ -9,6 +9,11 @@ const event = {
   venue: 'สนามสวน', courts: 1, courtNames: '4', organizerName: 'ต้น',
   confirmed: 2, capacity: 2, waiting: 0, participants: [{ nickname: 'ต้น' }, { nickname: 'เมย์' }]
 };
+const joined = {
+  type: 'memberJoined', replyToken: 'test-only-reply-token',
+  source: { type: 'group', groupId: settings.groupId },
+  joined: { members: [{ type: 'user', userId: 'U' + 'b'.repeat(32) }] }
+};
 function setup(t, options = settings) {
   const db = new DatabaseSync(':memory:');
   db.exec("CREATE TABLE events(id TEXT PRIMARY KEY); INSERT INTO events VALUES ('event');");
@@ -21,9 +26,81 @@ test('notifications are opt-in and use only an explicitly configured group', asy
   const { db, notifications } = setup(t, { ...settings, groupId: '' });
   t.mock.method(globalThis, 'fetch', () => { assert.fail('must not send'); });
   notifications.enqueue(event, 'created');
+  await notifications.welcome(joined);
   await notifications.flush();
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM line_notifications').get().n, 0);
   assert.throws(() => lineNotifications(db, { ...settings, groupId: 'U' + 'a'.repeat(32) }), /group ID/);
+});
+
+test('new group members get the approved welcome and signup link through a single-use reply token', async t => {
+  const { db, notifications } = setup(t);
+  const calls = [], accepted = new Set();
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, 'https://api.line.me/v2/bot/message/reply');
+    assert.equal(options.method, 'POST');
+    assert.equal(options.headers.Authorization, 'Bearer test-only-token');
+    const payload = JSON.parse(options.body);
+    calls.push(payload);
+    if (accepted.has(payload.replyToken)) return new Response(null, { status: 400 });
+    accepted.add(payload.replyToken);
+    return Response.json({});
+  });
+  const batch = { ...joined, joined: { members: [...joined.joined.members, { type: 'user', userId: 'U' + 'c'.repeat(32) }] } };
+  await notifications.welcome(batch);
+  assert.equal(calls.length, 1);
+  const payload = calls[0], message = payload.messages[0];
+  assert.equal(payload.notificationDisabled, false);
+  assert.equal(payload.messages.length, 1);
+  assert.equal(Object.hasOwn(payload, 'to'), false);
+  assert.match(message.altText, /ยินดีต้อนรับสู่ SKS Tennis Club/);
+  assert.equal(message.contents.header.contents[0].text, 'ยินดีต้อนรับสู่ SKS Tennis Club 🎾💚');
+  const text = message.contents.body.contents[0].text;
+  assert.match(text, /ดีใจที่ได้มาเป็นก๊วนเดียวกันครับ!/);
+  assert.match(text, /3\. เลือกนัดที่สะดวก แล้วกด “ลงชื่อนัดนี้”/);
+  assert.match(text, /คิวสำรอง/);
+  assert.match(text, /อย่าลืมถอนชื่อในระบบ/);
+  assert.match(text, /ให้ติ๊ก “จ่ายแล้ว”/);
+  assert.match(text, /แล้วเจอกันในคอร์ตน้าาา 🎾✨$/);
+  const action = message.contents.footer.contents[0].action, link = new URL(action.uri);
+  assert.equal(action.label, 'เปิดตารางนัด');
+  assert.equal(link.origin, 'https://liff.line.me');
+  assert.equal(link.pathname, '/123-test/');
+  assert.equal(link.searchParams.get('invite'), settings.inviteCode);
+  assert.equal(link.searchParams.has('event'), false);
+  await notifications.welcome({ ...batch, deliveryContext: { isRedelivery: true } });
+  assert.equal(accepted.size, 1); // LINE rejects already-used tokens; no push fallback.
+  await notifications.welcome({ ...joined, replyToken: 'another-join-token' });
+  assert.equal(accepted.size, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM line_notifications').get().n, 0);
+});
+
+test('welcome ignores other groups, OA joins, messages and events without joined users or reply tokens', async t => {
+  const { notifications } = setup(t);
+  t.mock.method(globalThis, 'fetch', () => { assert.fail('must not send'); });
+  for (const item of [null, {}, { ...joined, type: 'join' }, { ...joined, type: 'message' },
+    { ...joined, source: { type: 'group', groupId: 'C' + 'd'.repeat(32) } },
+    { ...joined, source: { type: 'user', userId: 'U' + 'b'.repeat(32) } },
+    { ...joined, replyToken: undefined }, { ...joined, replyToken: '' },
+    { ...joined, joined: undefined }, { ...joined, joined: { members: [] } },
+    { ...joined, joined: { members: [null, { type: 'user', userId: 'invalid' }] } }
+  ]) await notifications.welcome(item);
+});
+
+test('welcome exposes transient failures for webhook redelivery and acknowledges permanent reply errors', async t => {
+  const { notifications } = setup(t);
+  let status;
+  t.mock.method(globalThis, 'fetch', async () => {
+    if (!status) throw new Error('network unavailable');
+    return new Response(null, { status });
+  });
+  for (const failure of [undefined, 503, 429]) {
+    status = failure;
+    await assert.rejects(notifications.welcome(joined), { status: 502 });
+  }
+  for (const permanent of [400, 401, 403]) {
+    status = permanent;
+    await notifications.welcome(joined);
+  }
 });
 
 test('creation is deduplicated while each full transition gets a new notification, even after reinitializing', async t => {

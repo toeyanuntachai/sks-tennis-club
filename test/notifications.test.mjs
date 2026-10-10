@@ -16,11 +16,16 @@ test('OA announces creation once and each not-full to full transition, with sign
     LINE_LOGIN_CHANNEL_ID: '123', LINE_LIFF_ID: '123-test',
     LINE_MESSAGING_CHANNEL_ACCESS_TOKEN: 'test-only-token', LINE_MESSAGING_CHANNEL_SECRET: secret, LINE_NOTIFY_GROUP_ID: groupId
   });
-  const pushes = [], logs = [];
+  const pushes = [], replies = [], logs = [];
   let pushStatus = 200;
+  let replyStatus = 200;
   t.mock.method(console, 'log', (...args) => logs.push(args));
   t.mock.method(console, 'error', () => {});
   t.mock.method(globalThis, 'fetch', async (url, options) => {
+    if (url === 'https://api.line.me/v2/bot/message/reply') {
+      replies.push(JSON.parse(options.body));
+      return new Response(null, { status: replyStatus });
+    }
     if (url === 'https://api.line.me/v2/bot/message/push') {
       pushes.push(JSON.parse(options.body));
       return new Response(null, { status: pushStatus });
@@ -178,6 +183,7 @@ test('OA announces creation once and each not-full to full transition, with sign
     assert.equal((await request('POST', webhook, '', payload, { origin: undefined, 'x-line-signature': signature })).status, 401);
   }
   assert.equal(logs.length, 0);
+  assert.equal(replies.length, 0);
   assert.equal((await request('POST', webhook, '', payload, { origin: undefined, 'x-line-signature': sign(payload) })).status, 200);
   assert.deepEqual(logs, [['LINE group ID:', groupId]]);
   const empty = '{"events":[]}';
@@ -186,6 +192,23 @@ test('OA announces creation once and each not-full to full transition, with sign
   assert.equal((await request('POST', webhook, '', 'bad-json', { origin: undefined, 'x-line-signature': sign('bad-json') })).status, 400);
   assert.equal((await request('POST', webhook, '', '{}', { origin: undefined, 'x-line-signature': sign('{}') })).status, 400);
   assert.equal((await request('POST', webhook, '', 'a'.repeat(1024 * 1024 + 1), { origin: undefined })).status, 413);
+  assert.equal(pushes.length, beforeWebhook);
+  const newcomer = { type: 'memberJoined', replyToken: 'test-only-reply-token', source: { type: 'group', groupId }, joined: { members: [{ type: 'user', userId: 'U' + 'b'.repeat(32) }] } };
+  const greet = async (event, signature) => {
+    const raw = JSON.stringify({ events: [event] });
+    return request('POST', webhook, '', raw, { origin: undefined, 'x-line-signature': signature ?? sign(raw) });
+  };
+  assert.equal((await greet(newcomer, 'wrong')).status, 401);
+  assert.equal(replies.length, 0);
+  assert.equal((await greet({ ...newcomer, source: { type: 'group', groupId: 'C' + 'c'.repeat(32) } })).status, 200);
+  assert.equal(replies.length, 0);
+  assert.equal((await greet(newcomer)).status, 200);
+  assert.equal(replies.length, 1);
+  assert.match(replies[0].messages[0].altText, /ยินดีต้อนรับ/);
+  replyStatus = 503;
+  assert.equal((await greet(newcomer)).status, 502);
+  replyStatus = 400;
+  assert.equal((await greet({ ...newcomer, deliveryContext: { isRedelivery: true } })).status, 200);
   assert.equal(pushes.length, beforeWebhook);
   assert.equal((await request('POST', '/api/events', alice.cookie, fields, { origin: undefined })).status, 403);
   const config = (await request('GET', '/api/config')).data;

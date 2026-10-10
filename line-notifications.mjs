@@ -1,5 +1,44 @@
 import { randomUUID } from "node:crypto";
 
+function welcomeMessage(liffId, inviteCode) {
+  const url = new URL("https://liff.line.me/" + encodeURIComponent(liffId) + "/");
+  url.searchParams.set("invite", inviteCode);
+  return {
+    type: "flex",
+    altText: "ยินดีต้อนรับสู่ SKS Tennis Club 🎾💚 · วิธีลงชื่อนัด",
+    contents: {
+      type: "bubble",
+      size: "mega",
+      styles: {
+        header: { backgroundColor: "#E7EBDF" },
+        body: { backgroundColor: "#FFFDF8" },
+        footer: { backgroundColor: "#F8F4EC" },
+      },
+      header: { type: "box", layout: "vertical", contents: [
+        { type: "text", text: "ยินดีต้อนรับสู่ SKS Tennis Club 🎾💚", color: "#576B4F", weight: "bold", wrap: true },
+      ] },
+      body: { type: "box", layout: "vertical", paddingAll: "20px", contents: [
+        { type: "text", color: "#1D3C51", wrap: true, text: `ดีใจที่ได้มาเป็นก๊วนเดียวกันครับ!
+
+📋 วิธีลงชื่อนัด
+1. กดปุ่ม “เปิดตารางนัด” ด้านล่าง
+2. เข้าใช้งานผ่าน LINE และตั้งชื่อเล่นครั้งแรกให้เพื่อน ๆ จำได้
+3. เลือกนัดที่สะดวก แล้วกด “ลงชื่อนัดนี้”
+
+🙋 ถ้านัดเต็มแล้ว ระบบจะให้เข้าคิวสำรอง หากมีคนถอนชื่อ จะเลื่อนคิวให้ตามลำดับ
+หากลงชื่อแล้วมาไม่ได้ อย่าลืมถอนชื่อในระบบด้วยน้าาา
+
+💸 เมื่อคนครบ ระบบจะแจ้งยอดค่าใช้จ่ายหารตามจำนวนผู้ได้ที่ในนัด ดู QR จ่ายเงินได้ในหน้านัด และเมื่อโอนแล้วให้ติ๊ก “จ่ายแล้ว” ด้วยครับ
+
+แล้วเจอกันในคอร์ตน้าาา 🎾✨` },
+      ] },
+      footer: { type: "box", layout: "vertical", contents: [
+        { type: "button", style: "primary", color: "#1D3C51", height: "sm", action: { type: "uri", label: "เปิดตารางนัด", uri: url.href } },
+      ] },
+    },
+  };
+}
+
 function notificationMessage(event, kind, liffId, inviteCode) {
   const full = kind === "full";
   const billing = full && event.sharePerPersonSatang != null;
@@ -223,6 +262,26 @@ export function lineNotifications(db, { token, groupId, liffId, inviteCode }) {
     }
   }
   return {
+    async welcome(event) {
+      if (!enabled || event?.type !== "memberJoined" || event.source?.type !== "group" || event.source.groupId !== groupId ||
+        typeof event.replyToken !== "string" || !event.replyToken || event.replyToken.length > 256 ||
+        !Array.isArray(event.joined?.members) || !event.joined.members.some(person => person?.type === "user" && /^U[0-9a-f]{32}$/.test(person.userId))) return;
+      let response;
+      try {
+        response = await fetch("https://api.line.me/v2/bot/message/reply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+          body: JSON.stringify({ replyToken: event.replyToken, messages: [welcomeMessage(liffId, inviteCode)], notificationDisabled: false }),
+          signal: AbortSignal.timeout(8000),
+        });
+      } catch {}
+      if (!response || response.status >= 500 || response.status === 429) {
+        console.error("LINE welcome reply failed; webhook can be redelivered.");
+        throw Object.assign(new Error("ส่งข้อความต้อนรับ LINE ไม่สำเร็จ กรุณาลองใหม่"), { status: 502 });
+      }
+      // A used/expired reply token cannot send again, including on webhook redelivery.
+      if (!response.ok) console.error("LINE welcome reply rejected:", response.status);
+    },
     enqueue(event, kind) {
       if (!enabled) return;
       const payload = JSON.stringify({
