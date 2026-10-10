@@ -1,5 +1,5 @@
-export type Member = { id: string; nickname: string | null };
-export type Participant = { id: string; nickname: string; paid: boolean; isGuest: boolean };
+export type Member = { id: string; nickname: string | null; pictureUrl?: string | null };
+export type Participant = { id: string; nickname: string; paid: boolean; isGuest: boolean; pictureUrl?: string | null };
 export type ClubEvent = {
   id: string; title: string; venue: string; date: string; start: string; end: string;
   courts: number; courtNames: string; capacity: number; cancelled: boolean;

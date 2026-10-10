@@ -22,6 +22,34 @@ async function fillMatch() {
   return user;
 }
 
+test('player search shows profile photos and initials without affecting selection or duplicate exclusion', async () => {
+  const pictureUrl = 'https://profile.line-scdn.net/player';
+  vi.stubGlobal('fetch',vi.fn(async () => Response.json({...data,players:players.map((p,i)=>({...p,pictureUrl:i===0?pictureUrl:null}))})));
+  render(<EventMatches {...props()} />);
+  const user=userEvent.setup();
+  await user.click(await screen.findByRole('button',{name:'+ บันทึกผล'}));
+  const first=screen.getByRole('combobox',{name:'ทีม A ผู้เล่น 1'});
+  await user.click(first); await user.type(first,'ต้น');
+  const option=await screen.findByRole('option',{name:/ต้น/});
+  const photo=option.querySelector<HTMLImageElement>('img')!;
+  expect(photo.getAttribute('src')).toBe(pictureUrl);
+  expect(photo.alt).toBe('');
+  fireEvent.error(photo);
+  expect(photo.hidden).toBe(true);
+  expect(within(option).getByText('ต')).toBeTruthy();
+  await user.click(option);
+  expect((first as HTMLInputElement).value).toBe('ต้น');
+  const second=screen.getByRole('combobox',{name:'ทีม A ผู้เล่น 2'});
+  await user.click(second);
+  expect(screen.queryByRole('option',{name:/ต้น/})).toBeNull();
+  await user.type(second,'เมย์');
+  const withoutPhoto=await screen.findByRole('option',{name:/เมย์/});
+  expect(withoutPhoto.querySelector('img')).toBeNull();
+  expect(within(withoutPhoto).getByText('เ')).toBeTruthy();
+  await user.keyboard('{ArrowDown}{Enter}');
+  expect((second as HTMLInputElement).value).toBe('เมย์');
+});
+
 test('match form retains all choices after failure and retries with the same request identity', async () => {
   const requests: Record<string,unknown>[]=[]; let failing=true;
   vi.stubGlobal('fetch',vi.fn(async (_path:string,options:RequestInit={}) => {

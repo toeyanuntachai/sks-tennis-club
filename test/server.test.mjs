@@ -16,6 +16,8 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   process.env.LINE_LIFF_ID = '1234567890-test';
   process.env.SKS_INVITE_CODE = invite;
   const calls = [];
+  const alicePicture = 'https://profile.line-scdn.net/alice';
+  const pictures = { alice: alicePicture };
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     assert.equal(url, 'https://api.line.me/oauth2/v2.1/verify');
     assert.equal(options.method, 'POST');
@@ -27,6 +29,7 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
       iss: token === 'wrong-issuer' ? 'https://attacker.example' : 'https://access.line.me',
       aud: token === 'wrong-channel' ? '5555555555' : '1234567890',
       sub: 'line-subject-' + token, name: token,
+      picture: pictures[token],
       exp: Math.floor(Date.now()/1000) + (token === 'expired' ? -10 : 3600)
     });
   });
@@ -85,6 +88,8 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   let event=(await request('GET',path,alice.cookie)).data.event;
   assert.deepEqual(event.participants.map(p=>p.id),[alice.id]);
   assert.deepEqual(event.waitlist.map(p=>p.id),[bob.id,cara.id]);
+  assert.equal(event.participants[0].pictureUrl,alicePicture);
+  assert.equal(event.waitlist[0].pictureUrl,null);
   assert.equal(event.participants[0].paid,false);
   assert.deepEqual(event.withdrawn,[]);
   const payment=path+'/payment';
@@ -111,7 +116,7 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   event=(await request('GET',path,alice.cookie)).data.event;
   assert.deepEqual(event.participants.map(p=>p.id),[alice.id]);
   assert.deepEqual(event.waitlist.map(p=>p.id),[cara.id]);
-  assert.deepEqual(event.withdrawn,[{id:bob.id,nickname:'เมย์',isGuest:false,paid:true}]);
+  assert.deepEqual(event.withdrawn,[{id:bob.id,nickname:'เมย์',pictureUrl:null,isGuest:false,paid:true}]);
   event=(await request('PATCH',payment,bob.cookie,{memberId:bob.id,paid:false})).data.event;
   assert.equal(event.withdrawn[0].paid,false);
   await request('PATCH',payment,alice.cookie,{memberId:bob.id,paid:true});
@@ -121,7 +126,7 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   assert.deepEqual(event.participants.map(p=>p.id),[cara.id]);
   assert.deepEqual(event.waitlist.map(p=>p.id),[bob.id]);
   assert.equal(event.waitlist[0].paid,true);
-  assert.deepEqual(event.withdrawn,[{id:alice.id,nickname:'ต้น',isGuest:false,paid:false}]);
+  assert.deepEqual(event.withdrawn,[{id:alice.id,nickname:'ต้น',pictureUrl:alicePicture,isGuest:false,paid:false}]);
   await request('POST',signup,alice.cookie,{});
   await Promise.all([request('POST',signup,cara.cookie,{}),request('POST',signup,cara.cookie,{})]);
   await request('DELETE',signup,dan.cookie,{memberId:cara.id});
@@ -192,6 +197,7 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   const guest=roster.participants[1];
   assert.equal((await request('PATCH',rosterPath+'/payment',bob.cookie,{memberId:guest.id,paid:true})).status,403);
   assert.equal(guest.isGuest,true);assert.equal(guest.paid,false);
+  assert.equal(guest.pictureUrl,null);
   assert.equal(roster.participants[0].isGuest,false);
   await request('POST',people,alice.cookie,{memberId:cara.id});
   roster=(await request('POST',people,alice.cookie,{memberId:bob.id})).data.event;
@@ -291,6 +297,7 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   assert.equal(logo.bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
   const home = await request('GET','/');
   assert.equal(home.status,200);
+  assert.match(home.headers['content-security-policy'],/img-src 'self' data: https:\/\/profile\.line-scdn\.net;/);
   const html = home.bytes.toString();
   const nonce = html.match(/name="csp-nonce" content="([^\"]+)"/)[1];
   assert.match(home.headers['content-security-policy'],new RegExp("style-src 'self' 'nonce-"+nonce.replace(/[+]/g,'\\+')+"'"));
@@ -305,6 +312,14 @@ test('LINE membership, organizer permissions, and durable FIFO signup queue', as
   assert.equal((await request('GET','/assets/server.mjs')).status,404);
   assert.equal((await request('GET','/assets/%2e%2e%2fserver.mjs')).status,404);
   assert.equal((await request('GET','/data/sks.sqlite')).status,404);
+  // Only the verified LINE picture is stored; re-login refreshes or clears it.
+  for (const picture of ['https://profile.line-scdn.net/alice-new', undefined, 'http://profile.line-scdn.net/alice', 'https://profile.line-scdn.net.attacker.example/alice', 'https://user:password@profile.line-scdn.net/alice', 'not-a-url']) {
+    pictures.alice = picture;
+    const verified = await request('POST','/api/auth','',{idToken:'alice',pictureUrl:alicePicture});
+    assert.equal(verified.status,200);
+    assert.equal(verified.data.member.id,alice.id);
+    assert.equal((await request('GET',path,bob.cookie)).data.event.waitlist.find(p=>p.id===alice.id).pictureUrl,picture === 'https://profile.line-scdn.net/alice-new' ? picture : null);
+  }
   assert.equal((await request('POST','/api/logout',alice.cookie,{})).status,200);
   assert.equal((await request('GET','/api/me',alice.cookie)).status,401);
 });

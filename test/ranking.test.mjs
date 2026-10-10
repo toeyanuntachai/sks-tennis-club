@@ -19,6 +19,7 @@ test('monthly doubles ranking, corrections, permissions, duplicate requests and 
     db.prepare('INSERT INTO members(id,line_id,nickname) VALUES (?,?,?)').run(id, 'line-' + id, id);
     db.prepare('INSERT INTO sessions VALUES (?,?,?)').run(createHash('sha256').update(id.repeat(43)).digest('hex'), id, now + 3600000);
   }
+  for (const id of ['a','c','d']) db.prepare('UPDATE members SET picture_url=? WHERE id=?').run('https://profile.line-scdn.net/' + id,id);
   async function request(method, url, who = 'a', data, suppliedOrigin = origin) {
     const req = Readable.from(data === undefined ? [] : [Buffer.from(JSON.stringify(data))]);
     req.method = method; req.url = url; req.headers = { 'content-type':'application/json', origin:suppliedOrigin, cookie: who ? 'sks_session=' + who.repeat(43) : '' };
@@ -41,7 +42,9 @@ test('monthly doubles ranking, corrections, permissions, duplicate requests and 
   // Legacy self-signups may not have a payment row yet; withdrawal must retain their identity.
   db.prepare('DELETE FROM event_payments WHERE event_id=? AND member_id=?').run(path.split('/').at(-1),'c');
   await request('DELETE',path+'/signup','c',{});
-  assert.deepEqual((await request('GET',matches)).data.players.map(p=>p.id),['a','b','c','d']);
+  const selectable = (await request('GET',matches)).data.players;
+  assert.deepEqual(selectable.map(p=>p.id),['a','b','c','d']);
+  assert.deepEqual(selectable.map(p=>p.pictureUrl),['https://profile.line-scdn.net/a',null,'https://profile.line-scdn.net/c','https://profile.line-scdn.net/d']);
   const guest=(await request('POST',path+'/participants','a',{nickname:'guest'})).data.event.waitlist.find(p=>p.isGuest);
   for (const invalid of [
     {...payload,teamA:['a','a']}, {...payload,teamA:['a']}, {...payload,teamB:['c','e']},

@@ -77,7 +77,23 @@ export function EventDetail({ initial, member, config, line, onBack, onEdit, onE
   function roster(people: Participant[], withdrawn = false) {
     const action = (p: Participant, label: string, work: () => void) => <Button key={label} variant="link" disabled={pending} aria-label={label + ': ' + p.nickname} onClick={work} className="px-0">{label}</Button>;
     return people.length ? <ol className="divide-y divide-border">{people.map((p, i) => <li key={p.id} className="py-3"><div className="flex items-center gap-3">
-      <span className="grid size-9 shrink-0 place-items-center rounded-full bg-sage text-sm">{i + 1}</span>
+      <span aria-hidden="true" className="relative grid size-9 shrink-0 place-items-center rounded-full bg-sage text-sm">
+        {Array.from(p.nickname)[0]}
+        {p.pictureUrl && (
+          <img
+            key={p.pictureUrl}
+            src={p.pictureUrl}
+            alt=""
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            className="absolute inset-0 size-9 rounded-full object-cover"
+            onError={(e) => { e.currentTarget.hidden = true; }}
+          />
+        )}
+        <small className="absolute -right-1 -bottom-1 rounded-full bg-background px-1 text-xs">
+          {i + 1}
+        </small>
+      </span>
       <span className="min-w-0 flex-1 break-words">{p.nickname}{p.id === member.id && <small className="ml-2 text-leaf">คุณ</small>}{p.isGuest && <small className="mt-1 block text-xs text-muted-foreground">เพิ่มโดยผู้จัด</small>}</span>
       {!event.cancelled && (event.isOrganizer || p.id === member.id) ? <Label className="flex min-h-11 shrink-0 gap-2 text-sm font-normal"><Checkbox checked={p.paid} disabled={pending} aria-label={'จ่ายแล้ว: ' + p.nickname} onCheckedChange={paid => void run(() => mutate('/payment', 'PATCH', { memberId: p.id, paid: paid === true }, 'บันทึกสถานะจ่ายเงินแล้ว'))} /><span>{p.paid ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'}</span></Label> : <span className={'shrink-0 text-sm ' + (p.paid ? 'font-semibold text-leaf' : 'text-muted-foreground')}>{p.paid ? 'จ่ายแล้ว' : 'ยังไม่จ่าย'}</span>}
     </div>{editable && <div className="ml-12 flex flex-wrap gap-x-4">

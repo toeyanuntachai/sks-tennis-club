@@ -37,6 +37,27 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
+test('roster photos appear in each list, fall back on failure, and retry when the URL changes', async () => {
+  const pictureUrl = 'https://profile.line-scdn.net/player';
+  const player = { id: 'player', nickname: 'ต้น', paid: false, isGuest: false, pictureUrl };
+  const event = detail({ participants: [player, guest], waitlist: [{ ...player, id: 'waiting' }], withdrawn: [{ ...player, id: 'withdrawn' }] });
+  backend(event, ({ path }) => path.endsWith('/payment') ? Response.json({ event: { ...event, participants: [{ ...player, pictureUrl: pictureUrl + '-new' }, guest] } }) : undefined);
+  render(<App />);
+  await screen.findByRole('heading', { name: 'นัดที่แชร์' });
+  const photos = document.querySelectorAll<HTMLImageElement>('img[src="' + pictureUrl + '"]');
+  expect(photos).toHaveLength(3);
+  const row = photos[0].closest('li')!;
+  expect(photos[0].alt).toBe('');
+  expect(photos[0].getAttribute('referrerpolicy')).toBe('no-referrer');
+  fireEvent.error(photos[0]);
+  expect(photos[0].hidden).toBe(true);
+  expect(within(row).getByText('ต')).toBeTruthy();
+  expect(screen.getByText(guest.nickname).closest('li')!.querySelector('img')).toBeNull();
+  await userEvent.click(within(row).getByRole('checkbox'));
+  await waitFor(() => expect(document.querySelector('img[src="' + pictureUrl + '-new"]')).toBeTruthy());
+  expect(document.querySelector<HTMLImageElement>('img[src="' + pictureUrl + '-new"]')!.hidden).toBe(false);
+});
+
 test('shared event is read after LIFF normalizes the URL; member names remain text and organizer actions stay hidden', async () => {
   history.replaceState(null, '', '/?liff.state=redirect');
   const calls: string[] = [];

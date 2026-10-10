@@ -96,6 +96,10 @@ db.exec(`
   );
 `);
 
+if (!db.prepare('PRAGMA table_info(members)').all().some(column => column.name === 'picture_url')) {
+  db.exec('ALTER TABLE members ADD COLUMN picture_url TEXT');
+}
+
 const paymentQrSchema = `CREATE TABLE IF NOT EXISTS event_payment_qr (
   event_id TEXT PRIMARY KEY REFERENCES events(id),
   image BLOB NOT NULL,
@@ -326,11 +330,11 @@ function detail(id, member) {
   const totalCostSatang = courtCostSatang === null && ballCostSatang === null ? null : (courtCostSatang ?? 0) + (ballCostSatang ?? 0);
   const divisor = BigInt(event.confirmed) * 100n;
   const sharePerPersonSatang = totalCostSatang !== null && event.confirmed ? Number((BigInt(totalCostSatang) + divisor - 1n) / divisor) * 100 : null;
-  const rows = db.prepare(`SELECT m.id, m.nickname, m.line_id IS NULL AS isGuest, COALESCE(p.paid, 0) AS paid FROM registrations r
+  const rows = db.prepare(`SELECT m.id, m.nickname, m.picture_url AS pictureUrl, m.line_id IS NULL AS isGuest, COALESCE(p.paid, 0) AS paid FROM registrations r
     JOIN members m ON m.id = r.member_id
     LEFT JOIN event_payments p ON p.event_id = r.event_id AND p.member_id = r.member_id
     WHERE r.event_id = ? ORDER BY r.sequence`).all(id).map(p => ({ ...p, isGuest: Boolean(p.isGuest), paid: Boolean(p.paid) }));
-  const withdrawn = db.prepare(`SELECT m.id, m.nickname, m.line_id IS NULL AS isGuest, p.paid FROM event_payments p
+  const withdrawn = db.prepare(`SELECT m.id, m.nickname, m.picture_url AS pictureUrl, m.line_id IS NULL AS isGuest, p.paid FROM event_payments p
     JOIN members m ON m.id = p.member_id
     WHERE p.event_id = ? AND NOT EXISTS (
       SELECT 1 FROM registrations r WHERE r.event_id = p.event_id AND r.member_id = p.member_id
@@ -347,7 +351,7 @@ function detail(id, member) {
   };
 }
 function matchPlayers(id) {
-  return db.prepare(`SELECT m.id, m.nickname FROM members m WHERE m.line_id IS NOT NULL AND m.nickname IS NOT NULL AND (
+  return db.prepare(`SELECT m.id, m.nickname, m.picture_url AS pictureUrl FROM members m WHERE m.line_id IS NOT NULL AND m.nickname IS NOT NULL AND (
     EXISTS(SELECT 1 FROM registrations WHERE event_id=? AND member_id=m.id)
     OR EXISTS(SELECT 1 FROM event_payments WHERE event_id=? AND member_id=m.id)) ORDER BY m.nickname, m.id`).all(id, id);
 }
@@ -418,6 +422,13 @@ async function authenticate(req, res) {
   let identity;
   try { identity = await response.json(); } catch { fail(502, 'LINE ส่งข้อมูลไม่ครบ กรุณาลองใหม่'); }
   if (identity.iss !== 'https://access.line.me' || String(identity.aud) !== channelId || typeof identity.sub !== 'string' || !identity.sub || identity.sub.length > 256 || !Number.isFinite(identity.exp) || identity.exp * 1000 <= Date.now()) fail(401, 'ยืนยันบัญชี LINE ไม่สำเร็จ');
+  let pictureUrl = null;
+  if (typeof identity.picture === 'string' && identity.picture.length <= 2048) {
+    try {
+      const picture = new URL(identity.picture);
+      if (picture.protocol === 'https:' && picture.hostname === 'profile.line-scdn.net' && !picture.port && !picture.username && !picture.password) pictureUrl = picture.href;
+    } catch {}
+  }
   const member = atomic(() => {
     let found = db.prepare('SELECT id, nickname FROM members WHERE line_id = ?').get(identity.sub);
     if (!found) {
@@ -425,6 +436,7 @@ async function authenticate(req, res) {
       found = { id: randomUUID(), nickname: null };
       db.prepare('INSERT INTO members(id, line_id) VALUES (?, ?)').run(found.id, identity.sub);
     }
+    db.prepare('UPDATE members SET picture_url = ? WHERE id = ?').run(pictureUrl, found.id);
     return found;
   });
   const token = randomBytes(32).toString('base64url');
@@ -446,7 +458,7 @@ export async function handleRequest(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' https://static.line-scdn.net; style-src 'self'; img-src 'self' data:; connect-src 'self' https://*.line.me https://*.line-scdn.net; frame-src https://*.line.me; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' https://static.line-scdn.net; style-src 'self'; img-src 'self' data: https://profile.line-scdn.net; connect-src 'self' https://*.line.me https://*.line-scdn.net; frame-src https://*.line.me; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   try {
     const url = new URL(req.url, origin);
     const path = url.pathname;

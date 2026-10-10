@@ -37,6 +37,7 @@ for (const guestSchema of [false, true]) test('cost migration preserves WAL data
     backup.close();
   }
   assert.equal(legacy.prepare('PRAGMA table_info(members)').all().find(c=>c.name==='line_id').notnull,0);
+  assert.deepEqual(legacy.prepare('SELECT picture_url FROM members').all().map(row=>row.picture_url),[null,null]);
   for(const table of tables)assert.deepEqual(legacy.prepare('SELECT '+Object.keys(before[table][0]).join(',')+' FROM '+table).all().map(row=>({...row})),before[table]);
   assert.deepEqual({...legacy.prepare('SELECT court_cost_satang,ball_cost_satang FROM events').get()},{court_cost_satang:null,ball_cost_satang:null});
   assert.deepEqual(legacy.prepare('PRAGMA foreign_key_check').all(),[]);
@@ -48,8 +49,10 @@ for (const guestSchema of [false, true]) test('cost migration preserves WAL data
   assert.equal(legacy.prepare('SELECT sequence FROM registrations WHERE member_id=?').get('guest').sequence,46);
   const qr=readFileSync(new URL('../public/sks-logo.png',import.meta.url));
   legacy.prepare('UPDATE events SET court_cost_satang=100000, ball_cost_satang=12550 WHERE id=?').run('event');
+  legacy.prepare('UPDATE members SET picture_url=? WHERE id=?').run('https://profile.line-scdn.net/owner','owner');
   legacy.prepare('INSERT INTO event_payment_qr VALUES (?,?,?)').run('event',qr,'image/png');
   assert.equal(startup(),'');
+  assert.equal(legacy.prepare('SELECT picture_url FROM members WHERE id=?').get('owner').picture_url,'https://profile.line-scdn.net/owner');
   assert.equal(readdirSync(directory).filter(name=>name.includes('.before-')).length,backups.length);
   assert.deepEqual({...legacy.prepare('SELECT court_cost_satang,ball_cost_satang FROM events').get()},{court_cost_satang:100000,ball_cost_satang:12550});
   assert.deepEqual(Buffer.from(legacy.prepare('SELECT image FROM event_payment_qr WHERE event_id=?').get('event').image),qr);
