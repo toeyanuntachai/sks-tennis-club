@@ -46,9 +46,23 @@ npm test
 npm start
 ```
 
-เปิด http://127.0.0.1:4317 โดยไม่ต้องมี `.env` เพื่อดูหน้าต้อนรับ `npm test` ตรวจ TypeScript, build หน้าเว็บ และรันทดสอบทั้งหมด หากแก้หน้าเว็บแล้วต้องการดู production build ใหม่ ใช้ `npm run build` แล้วรีเฟรช
+เปิด http://127.0.0.1:4317 โดยไม่ต้องมี `.env` เพื่อดูหน้าต้อนรับ `npm test` ตรวจ lint/รูปแบบโค้ดด้วย Biome, ตรวจ TypeScript, build หน้าเว็บ และรันทดสอบทั้งหมด หากแก้หน้าเว็บแล้วต้องการดู production build ใหม่ ใช้ `npm run build` แล้วรีเฟรช
 
 ระหว่างพัฒนาหน้าเว็บ ใช้สอง terminal: `SKS_ORIGIN=http://127.0.0.1:5173 npm start` สำหรับ backend และ `npm run dev` สำหรับ Vite แล้วเปิด http://127.0.0.1:5173 การเรียกข้อมูลผ่าน proxy กลับไปยัง Node เดิม ส่วนการล็อกอินต้องตั้งค่า LINE และลิงก์เชิญตามปกติ
+
+## Lint และจัดรูปแบบโค้ด
+
+ใช้ Biome ที่ล็อกเวอร์ชันไว้ใน devDependencies และตั้งค่าใน `biome.json` รองรับ TypeScript, React, HTML และ Tailwind CSS ใช้ช่องว่าง 2 ตัวและ double quotes
+
+```sh
+npm run lint
+npm run format
+npm run check
+```
+
+`lint` ตรวจโค้ด, `format` จัดรูปแบบและบันทึกไฟล์, `check` ตรวจ lint/รูปแบบ/imports โดยไม่แก้ไฟล์ ใช้ `npm run check -- --write` เพื่อจัดรูปแบบ เรียง imports และใช้เฉพาะ lint fixes ที่ Biome ระบุว่าปลอดภัย ไม่ใช้ `--unsafe` อัตโนมัติ
+
+ใช้กฎ recommended โดยอนุญาต string concatenation, TypeScript non-null assertions และ dependencies ที่ใช้กระตุ้น refresh คง markup ของ shadcn input group พร้อมข้อยกเว้นเฉพาะไฟล์ ส่วน LINE initialization ที่ทำครั้งเดียวและ regex ปฏิเสธ control characters มีคำอธิบายข้อยกเว้นตรงโค้ด Biome อ่าน `.gitignore` และข้าม build output, lockfile และไฟล์เครื่องมือใน `.cursor`
 
 ## โครงสร้างหน้าเว็บ
 

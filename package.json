@@ -10,11 +10,15 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "start": "node --env-file-if-exists=.env server.mjs",
-    "test": "npm run build && npm run test:server && npm run test:ui",
+    "test": "npm run check && npm run build && npm run test:server && npm run test:ui",
     "test:server": "node --test test/*.test.mjs",
-    "test:ui": "vitest run"
+    "test:ui": "vitest run",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "check": "biome check ."
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.15",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",

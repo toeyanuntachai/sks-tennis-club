@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 function welcomeMessage(liffId, inviteCode) {
-  const url = new URL("https://liff.line.me/" + encodeURIComponent(liffId) + "/");
+  const url = new URL(
+    "https://liff.line.me/" + encodeURIComponent(liffId) + "/",
+  );
   url.searchParams.set("invite", inviteCode);
   return {
     type: "flex",
@@ -14,11 +16,29 @@ function welcomeMessage(liffId, inviteCode) {
         body: { backgroundColor: "#FFFDF8" },
         footer: { backgroundColor: "#F8F4EC" },
       },
-      header: { type: "box", layout: "vertical", contents: [
-        { type: "text", text: "ยินดีต้อนรับสู่ SKS Tennis Club 🎾💚", color: "#576B4F", weight: "bold", wrap: true },
-      ] },
-      body: { type: "box", layout: "vertical", paddingAll: "20px", contents: [
-        { type: "text", color: "#1D3C51", wrap: true, text: `ดีใจที่ได้มาเป็นก๊วนเดียวกันครับ!
+      header: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          {
+            type: "text",
+            text: "ยินดีต้อนรับสู่ SKS Tennis Club 🎾💚",
+            color: "#576B4F",
+            weight: "bold",
+            wrap: true,
+          },
+        ],
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "20px",
+        contents: [
+          {
+            type: "text",
+            color: "#1D3C51",
+            wrap: true,
+            text: `ดีใจที่ได้มาเป็นก๊วนเดียวกันครับ!
 
 📋 วิธีลงชื่อนัด
 1. กดปุ่ม “เปิดตารางนัด” ด้านล่าง
@@ -30,11 +50,23 @@ function welcomeMessage(liffId, inviteCode) {
 
 💸 เมื่อคนครบ ระบบจะแจ้งยอดค่าใช้จ่ายหารตามจำนวนผู้ได้ที่ในนัด ดู QR จ่ายเงินได้ในหน้านัด และเมื่อโอนแล้วให้ติ๊ก “จ่ายแล้ว” ด้วยครับ
 
-แล้วเจอกันในคอร์ตน้าาา 🎾✨` },
-      ] },
-      footer: { type: "box", layout: "vertical", contents: [
-        { type: "button", style: "primary", color: "#1D3C51", height: "sm", action: { type: "uri", label: "เปิดตารางนัด", uri: url.href } },
-      ] },
+แล้วเจอกันในคอร์ตน้าาา 🎾✨`,
+          },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            color: "#1D3C51",
+            height: "sm",
+            action: { type: "uri", label: "เปิดตารางนัด", uri: url.href },
+          },
+        ],
+      },
     },
   };
 }
@@ -42,8 +74,15 @@ function welcomeMessage(liffId, inviteCode) {
 function notificationMessage(event, kind, liffId, inviteCode) {
   const full = kind === "full";
   const billing = full && event.sharePerPersonSatang != null;
-  const heading = billing ? "คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾" : full ? "คนเต็มแล้ว" : "เปิดนัดใหม่";
-  const money = satang => new Intl.NumberFormat("th-TH", { maximumFractionDigits: 2 }).format(satang / 100);
+  const heading = billing
+    ? "คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾"
+    : full
+      ? "คนเต็มแล้ว"
+      : "เปิดนัดใหม่";
+  const money = (satang) =>
+    new Intl.NumberFormat("th-TH", { maximumFractionDigits: 2 }).format(
+      satang / 100,
+    );
   const url = new URL(
     "https://liff.line.me/" + encodeURIComponent(liffId) + "/",
   );
@@ -86,12 +125,35 @@ function notificationMessage(event, kind, liffId, inviteCode) {
   ];
   if (billing) {
     contents.push(
-      { ...text("💰 คนละ " + money(event.sharePerPersonSatang) + " บาท", "#576B4F"), size: "xl", weight: "bold", margin: "md" },
-      text("ค่าใช้จ่ายรวม " + money(event.totalCostSatang) + " บาท ÷ ผู้ได้ที่ " + event.sharePeople + " คน", "#626F6A"),
+      {
+        ...text(
+          "💰 คนละ " + money(event.sharePerPersonSatang) + " บาท",
+          "#576B4F",
+        ),
+        size: "xl",
+        weight: "bold",
+        margin: "md",
+      },
+      text(
+        "ค่าใช้จ่ายรวม " +
+          money(event.totalCostSatang) +
+          " บาท ÷ ผู้ได้ที่ " +
+          event.sharePeople +
+          " คน",
+        "#626F6A",
+      ),
       text("ปัดขึ้นเป็นบาท ไม่รวมคิวสำรอง", "#626F6A"),
     );
     if (event.paymentQrUrl)
-      contents.push({ type: "image", url: event.paymentQrUrl, size: "full", aspectRatio: "1:1", aspectMode: "fit", margin: "md", action: { type: "uri", uri: url.href } });
+      contents.push({
+        type: "image",
+        url: event.paymentQrUrl,
+        size: "full",
+        aspectRatio: "1:1",
+        aspectMode: "fit",
+        margin: "md",
+        action: { type: "uri", uri: url.href },
+      });
     else contents.push(text("เปิดนัดเพื่อดูช่องทางชำระเงิน", "#626F6A"));
     contents.push(
       text("เมื่อโอนแล้ว ให้ทำเครื่องหมาย “จ่ายแล้ว” ในระบบด้วยน้าาา 💚"),
@@ -152,7 +214,11 @@ function notificationMessage(event, kind, liffId, inviteCode) {
             height: "sm",
             action: {
               type: "uri",
-              label: billing ? "เปิดนัด / ตรวจยอดล่าสุด" : full ? "ดูรายชื่อ" : "เปิดนัด / ลงชื่อ",
+              label: billing
+                ? "เปิดนัด / ตรวจยอดล่าสุด"
+                : full
+                  ? "ดูรายชื่อ"
+                  : "เปิดนัด / ลงชื่อ",
               uri: url.href,
             },
           },
@@ -174,11 +240,18 @@ export function lineNotifications(db, { token, groupId, liffId, inviteCode }) {
     status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'failed')),
     first_attempt_at INTEGER, next_attempt_at INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0
   );`;
-  if (db.prepare("PRAGMA table_info(line_notifications)").all().some(column => column.name === "event_id" && column.pk)) {
+  if (
+    db
+      .prepare("PRAGMA table_info(line_notifications)")
+      .all()
+      .some((column) => column.name === "event_id" && column.pk)
+  ) {
     // Preserve queued payloads and retry keys when removing the once-per-event full limit.
     db.exec("BEGIN IMMEDIATE");
     try {
-      db.exec(schema.replace("line_notifications (", "line_notifications_new ("));
+      db.exec(
+        schema.replace("line_notifications (", "line_notifications_new ("),
+      );
       db.exec(`INSERT INTO line_notifications_new SELECT * FROM line_notifications;
         DROP TABLE line_notifications;
         ALTER TABLE line_notifications_new RENAME TO line_notifications;`);
@@ -188,7 +261,9 @@ export function lineNotifications(db, { token, groupId, liffId, inviteCode }) {
       throw error;
     }
   } else db.exec(schema);
-  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS line_notifications_created ON line_notifications(event_id) WHERE kind='created'");
+  db.exec(
+    "CREATE UNIQUE INDEX IF NOT EXISTS line_notifications_created ON line_notifications(event_id) WHERE kind='created'",
+  );
   let sending;
   async function drain() {
     const jobs = db
@@ -263,24 +338,47 @@ export function lineNotifications(db, { token, groupId, liffId, inviteCode }) {
   }
   return {
     async welcome(event) {
-      if (!enabled || event?.type !== "memberJoined" || event.source?.type !== "group" || event.source.groupId !== groupId ||
-        typeof event.replyToken !== "string" || !event.replyToken || event.replyToken.length > 256 ||
-        !Array.isArray(event.joined?.members) || !event.joined.members.some(person => person?.type === "user" && /^U[0-9a-f]{32}$/.test(person.userId))) return;
+      if (
+        !enabled ||
+        event?.type !== "memberJoined" ||
+        event.source?.type !== "group" ||
+        event.source.groupId !== groupId ||
+        typeof event.replyToken !== "string" ||
+        !event.replyToken ||
+        event.replyToken.length > 256 ||
+        !Array.isArray(event.joined?.members) ||
+        !event.joined.members.some(
+          (person) =>
+            person?.type === "user" && /^U[0-9a-f]{32}$/.test(person.userId),
+        )
+      )
+        return;
       let response;
       try {
         response = await fetch("https://api.line.me/v2/bot/message/reply", {
           method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-          body: JSON.stringify({ replyToken: event.replyToken, messages: [welcomeMessage(liffId, inviteCode)], notificationDisabled: false }),
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + token,
+          },
+          body: JSON.stringify({
+            replyToken: event.replyToken,
+            messages: [welcomeMessage(liffId, inviteCode)],
+            notificationDisabled: false,
+          }),
           signal: AbortSignal.timeout(8000),
         });
       } catch {}
       if (!response || response.status >= 500 || response.status === 429) {
         console.error("LINE welcome reply failed; webhook can be redelivered.");
-        throw Object.assign(new Error("ส่งข้อความต้อนรับ LINE ไม่สำเร็จ กรุณาลองใหม่"), { status: 502 });
+        throw Object.assign(
+          new Error("ส่งข้อความต้อนรับ LINE ไม่สำเร็จ กรุณาลองใหม่"),
+          { status: 502 },
+        );
       }
       // A used/expired reply token cannot send again, including on webhook redelivery.
-      if (!response.ok) console.error("LINE welcome reply rejected:", response.status);
+      if (!response.ok)
+        console.error("LINE welcome reply rejected:", response.status);
     },
     enqueue(event, kind) {
       if (!enabled) return;
@@ -295,11 +393,12 @@ export function lineNotifications(db, { token, groupId, liffId, inviteCode }) {
     },
     flush() {
       if (!enabled) return Promise.resolve();
-      return (sending ||= drain()
+      sending ||= drain()
         .catch(() => console.error("LINE notification queue failed."))
         .finally(() => {
           sending = undefined;
-        }));
+        });
+      return sending;
     },
   };
 }
