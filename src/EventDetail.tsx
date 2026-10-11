@@ -66,13 +66,46 @@ export function EventDetail({ initial, member, config, line, onBack, onEdit, onE
   }
   async function share() {
     const trigger = document.activeElement;
-    const { url } = await api<{ url: string }>('/invite');
-    const link = new URL(url); link.searchParams.set('event', event.id);
-    const text = '🎾 ' + event.title + '\n' + dateLabel(event.date) + ' ' + event.start + '–' + event.end + '\n' + event.venue + ' · ' + event.courtNames + '\nรับ ' + event.capacity + ' คน ลงชื่อ ' + event.confirmed + ' คน\n' + link.href;
+    const { event: current } = await api<{ event: Detail }>(path);
+    setEvent(current);
+    const { url } = await api<{ url: string }>("/invite");
+    const link = new URL(url);
+    link.searchParams.set("event", current.id);
+    const full = current.confirmed >= current.capacity;
+    const billing = !current.cancelled && full && current.sharePerPersonSatang != null;
+    const lines = [
+      current.cancelled ? "นัดนี้ยกเลิกแล้ว" : billing
+        ? "คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾"
+        : full ? "คนครบแล้ว 🎾" : "ชวนมาตีเทนนิส 🎾",
+      current.title,
+      "📅 " + dateLabel(current.date) + " · " + current.start + "–" + current.end,
+      "📍 " + current.venue + " · คอร์ท " + current.courtNames,
+      "ผู้จัด: " + current.organizerName,
+      "ผู้ได้ที่ " + current.confirmed + "/" + current.capacity + " คน · คิวสำรอง " + current.waiting + " คน",
+    ];
+    if (!current.cancelled && current.totalCostSatang != null) {
+      lines.push("", "💰 ค่าใช้จ่ายรวม " + money(current.totalCostSatang) + " บาท");
+      if (current.sharePerPersonSatang != null)
+        lines.push((full ? "คนละ " : "ยอดหารปัจจุบันคนละ ") + money(current.sharePerPersonSatang) + " บาท (หารผู้ได้ที่ " + current.sharePeople + " คน)");
+      if (!full) lines.push("ยอดต่อคนอาจเปลี่ยนเมื่อจำนวนผู้ได้ที่เปลี่ยน");
+    }
+    const footer = ["", billing
+      ? current.hasPaymentQr ? "เปิดนัดเพื่อดู QR และตรวจยอดล่าสุดก่อนโอน แล้วติ๊ก ‘จ่ายแล้ว’ ด้วยน้าาา 🙏"
+        : "เปิดนัดเพื่อตรวจยอดล่าสุด และติดต่อผู้จัดเรื่องช่องทางโอน แล้วติ๊ก ‘จ่ายแล้ว’ ด้วยน้าาา 🙏"
+      : current.cancelled ? "ดูรายละเอียดนัด" : "เปิดนัด / ดูรายชื่อ / ลงชื่อ", link.href].join("\n");
+    const lists = [
+      "", "ผู้ได้ที่",
+      ...current.participants.map((person, i) => (i + 1) + ". " + person.nickname),
+      ...(current.waitlist.length ? ["", "คิวสำรอง", ...current.waitlist.map((person, i) => (i + 1) + ". " + person.nickname)] : []),
+    ].join("\n");
+    const summary = lines.join("\n");
+    const text = summary + (summary.length + lists.length + footer.length <= 5000
+      ? lists : "\n\nดูรายชื่อทั้งหมดและคิวสำรองในนัด") + footer;
     const result = await line.share(config, text);
-    if (result === 'shared') notify('แชร์นัดแล้ว');
-    if (result === 'copied') notify('คัดลอกข้อความแล้ว นำไปส่งในกลุ่ม LINE ได้เลย');
-    if (result === 'manual') openDialog({ type: 'share', text }, trigger);
+    if (result === "shared") notify("แชร์นัดแล้ว");
+    if (result === "copied")
+      notify("คัดลอกข้อความแล้ว นำไปส่งในกลุ่ม LINE ได้เลย");
+    if (result === "manual") openDialog({ type: "share", text }, trigger);
   }
   function roster(people: Participant[], withdrawn = false) {
     const action = (p: Participant, label: string, work: () => void) => <Button key={label} variant="link" disabled={pending} aria-label={label + ': ' + p.nickname} onClick={work} className="px-0">{label}</Button>;

@@ -369,18 +369,78 @@ test('list opens a new optional-cost event, signs up and withdraws self, cancels
 });
 
 test('share uses LINE target picker and preserves the event link without recreating its initial deep-link request', async () => {
+  const participants = Array.from({ length: 24 }, (_, i) => ({ ...guest, id: String(i), nickname: 'ผู้เล่น ' + (i + 1) }));
+  const latest = detail({ capacity: 24, confirmed: 24, participants, waiting: 1, waitlist: [{ ...guest, id: 'waiting', nickname: 'เพื่อนสำรอง' }], totalCostSatang: 240000, sharePeople: 24, sharePerPersonSatang: 10000, hasPaymentQr: true });
+  let reads = 0;
   backend(detail(), ({ path, method }) => {
     if (path === '/api/config') return Response.json({ ready: true, liffId: 'test-liff' });
     if (path === '/api/me' && method === 'PATCH') return Response.json({ member: owner });
+    if (path === '/api/events/e' && ++reads > 1) return Response.json({ event: latest });
   });
   window.liff = { init: vi.fn().mockResolvedValue(undefined), isLoggedIn: () => true, login: vi.fn(), getIDToken: () => 'test-token', isApiAvailable: () => true, shareTargetPicker: vi.fn().mockResolvedValue({ status: 'success' }) };
   const user = userEvent.setup(); render(<App />);
   await user.click(await screen.findByRole('button', { name: 'แชร์นัดใน LINE' }));
   await screen.findByText('แชร์นัดแล้ว');
   expect(window.liff.shareTargetPicker).toHaveBeenCalledWith([{ type: 'text', text: expect.stringContaining('https://liff.line.me/test/?invite=test-only&event=e') }]);
+  const text = vi.mocked(window.liff.shareTargetPicker).mock.calls[0][0][0].text;
+  expect(text).toContain('คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾');
+  expect(text).toContain('ผู้ได้ที่ 24/24 คน · คิวสำรอง 1 คน');
+  expect(text).toContain('คนละ 100 บาท (หารผู้ได้ที่ 24 คน)');
+  expect(text).toContain('ค่าใช้จ่ายรวม 2,400 บาท');
+  for (let i = 1; i <= 24; i++) expect(text).toContain(i + '. ผู้เล่น ' + i + '\n');
+  expect(text).toContain('คิวสำรอง\n1. เพื่อนสำรอง');
+  expect(text).toContain('เปิดนัดเพื่อดู QR และตรวจยอดล่าสุดก่อนโอน');
+  expect(text).toContain('จ่ายแล้ว');
+  expect(text).not.toContain('ถอน');
   await user.click(screen.getByRole('button', { name: owner.nickname }));
   await user.click(screen.getByRole('button', { name: 'บันทึกชื่อเล่น' }));
   await screen.findByRole('heading', { name: 'นัดตีของกลุ่ม' });
+});
+
+test.each([
+  { overrides: { capacity: 2, totalCostSatang: 20000, sharePerPersonSatang: 20000 }, heading: 'ชวนมาตีเทนนิส 🎾', expected: 'ยอดหารปัจจุบันคนละ 200 บาท', absent: 'ได้เวลาโอนค่าตี' },
+  { overrides: { cancelled: true, totalCostSatang: 20000, sharePerPersonSatang: 20000, hasPaymentQr: true }, heading: 'นัดนี้ยกเลิกแล้ว', expected: 'ดูรายละเอียดนัด', absent: 'คนละ ' },
+  { overrides: {}, heading: 'คนครบแล้ว 🎾', expected: 'เปิดนัด / ดูรายชื่อ / ลงชื่อ', absent: 'ได้เวลาโอนค่าตี' },
+  { overrides: { totalCostSatang: 20000, sharePerPersonSatang: 20000 }, heading: 'คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾', expected: 'ติดต่อผู้จัดเรื่องช่องทางโอน', absent: 'ดู QR' },
+])('share reflects current status: $heading ($expected)', async ({ overrides, heading, expected, absent }) => {
+  let reads = 0;
+  backend(detail(), ({ path }) => path === '/api/events/e' && ++reads > 1 ? Response.json({ event: detail(overrides) }) : undefined);
+  const user = userEvent.setup();
+  const copy = vi.spyOn(navigator.clipboard, 'writeText');
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: 'แชร์นัดใน LINE' }));
+  await screen.findByText('คัดลอกข้อความแล้ว นำไปส่งในกลุ่ม LINE ได้เลย');
+  const text = copy.mock.calls[0][0];
+  expect(text.startsWith(heading + '\n')).toBe(true);
+  expect(text).toContain(expected);
+  expect(text).not.toContain(absent);
+});
+
+test('share keeps payment details and the event link when the roster exceeds LINE text limits', async () => {
+  const participants = Array.from({ length: 200 }, (_, i) => ({ ...guest, id: String(i), nickname: '🎾'.repeat(20) }));
+  backend(detail({ capacity: 200, confirmed: 200, participants, totalCostSatang: 200000, sharePeople: 200, sharePerPersonSatang: 1000, hasPaymentQr: true }));
+  const user = userEvent.setup();
+  const copy = vi.spyOn(navigator.clipboard, 'writeText');
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: 'แชร์นัดใน LINE' }));
+  await screen.findByText('คัดลอกข้อความแล้ว นำไปส่งในกลุ่ม LINE ได้เลย');
+  const text = copy.mock.calls[0][0];
+  expect(text.length).toBeLessThanOrEqual(5000);
+  expect(text).toContain('ดูรายชื่อทั้งหมดและคิวสำรองในนัด');
+  expect(text).toContain('คนละ 10 บาท');
+  expect(text).toContain('ดู QR');
+  expect(text.endsWith('https://liff.line.me/test/?invite=test-only&event=e')).toBe(true);
+});
+
+test('share does not send stale payment details if refreshing the event fails', async () => {
+  let reads = 0;
+  backend(detail(), ({ path }) => path === '/api/events/e' && ++reads > 1 ? Response.json({ message: 'อ่านนัดไม่สำเร็จ' }, { status: 500 }) : undefined);
+  const user = userEvent.setup();
+  const copy = vi.spyOn(navigator.clipboard, 'writeText');
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: 'แชร์นัดใน LINE' }));
+  await screen.findByText('อ่านนัดไม่สำเร็จ');
+  expect(copy).not.toHaveBeenCalled();
 });
 
 test('share falls back to clipboard, and a denied clipboard shows selectable text in a dialog', async () => {
