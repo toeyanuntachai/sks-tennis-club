@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 
 test("optional costs and QR save atomically, follow confirmed attendance, and obey organizer permissions", async (t) => {
+  t.mock.method(Date, "now", () => Date.parse("2026-10-10T19:00:00+07:00"));
   const origin = "https://club.example";
   process.env.SKS_ORIGIN = origin;
   process.env.SKS_DATABASE_PATH = join(

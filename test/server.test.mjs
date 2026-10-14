@@ -7,6 +7,8 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 
 test("LINE membership, organizer permissions, and durable FIFO signup queue", async (t) => {
+  let now = Date.parse("2026-10-10T19:00:00+07:00");
+  t.mock.method(Date, "now", () => now);
   const origin = "https://club.example";
   const invite = "test-invite-code-abcdefghijklmnopqrstuvwxyz";
   const databasePath = join(
@@ -988,6 +990,130 @@ test("LINE membership, organizer permissions, and durable FIFO signup queue", as
       picture === "https://profile.line-scdn.net/alice-new" ? picture : null,
     );
   }
+  // Close attendance exactly at the Thai end time, retaining payment and scoring.
+  const endedEvent = await request("POST", "/api/events", alice.cookie, {
+    ...fields,
+    capacity: 4,
+    courtCostSatang: 40000,
+  });
+  const endedPath = "/api/events/" + endedEvent.data.event.id;
+  assert.equal(endedEvent.status, 201);
+  assert.equal(endedEvent.data.event.ended, false);
+  assert.equal(
+    (
+      await request("POST", endedPath + "/participants", alice.cookie, {
+        memberIds: [alice.id, bob.id, cara.id, dan.id],
+      })
+    ).status,
+    200,
+  );
+  now = Date.parse("2026-10-10T12:59:59.999Z");
+  assert.equal(
+    (await request("GET", endedPath, alice.cookie)).data.event.ended,
+    false,
+  );
+  assert.equal(
+    (await request("POST", endedPath + "/signup", alice.cookie, {})).status,
+    200,
+  );
+  now += 1;
+  const history = (await request("GET", endedPath, alice.cookie)).data.event;
+  assert.equal(history.ended, true);
+  assert.equal(
+    (await request("GET", "/api/events", alice.cookie)).data.events.find(
+      (e) => e.id === history.id,
+    ).ended,
+    true,
+  );
+  for (const [method, suffix, data] of [
+    ["POST", "/signup", {}],
+    ["DELETE", "/signup", {}],
+    ["POST", "/participants", { nickname: "เพิ่มหลังจบ" }],
+    ["DELETE", "/participants/" + bob.id, {}],
+    ["PATCH", "/participants/" + bob.id, { nickname: "แก้หลังจบ" }],
+    ["PATCH", "/participants/" + bob.id, { memberId: cara.id }],
+    ["PATCH", "", { ...fields, date: "2026-10-11", capacity: 4 }],
+    ["POST", "/cancel", {}],
+  ]) {
+    const closed = await request(
+      method,
+      endedPath + suffix,
+      alice.cookie,
+      data,
+    );
+    assert.equal(closed.status, 409, method + " " + suffix);
+    assert.match(closed.data.message, /นัดนี้จบแล้ว/);
+  }
+  assert.equal(
+    (await request("GET", endedPath + "/available-members", alice.cookie))
+      .status,
+    409,
+  );
+  assert.deepEqual(
+    (await request("GET", endedPath, alice.cookie)).data.event,
+    history,
+  );
+  assert.equal(
+    (
+      await request("PATCH", endedPath + "/payment", bob.cookie, {
+        memberId: bob.id,
+        paid: true,
+      })
+    ).status,
+    200,
+  );
+  const results = await request("POST", endedPath + "/matches", bob.cookie, {
+    teamA: [alice.id, bob.id],
+    teamB: [cara.id, dan.id],
+    scoreA: 4,
+    scoreB: 2,
+    requestId: "past_event_score_1234",
+  });
+  assert.equal(results.status, 201);
+  assert.equal(results.data.canRecord, true);
+  assert.equal(
+    (
+      await request(
+        "DELETE",
+        endedPath + "/matches/" + results.data.matches[0].id,
+        bob.cookie,
+        { version: 1 },
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await request("GET", endedPath, alice.cookie)
+    ).data.event.participants.find((p) => p.id === bob.id).paid,
+    true,
+  );
+  // A form opened before the end must also be rejected after reading its body.
+  now -= 1;
+  const delayed = Readable.from(
+    (async function* () {
+      now += 1;
+      yield Buffer.from(JSON.stringify({ ...fields, capacity: 4 }));
+    })(),
+  );
+  Object.assign(delayed, {
+    method: "PATCH",
+    url: endedPath,
+    headers: {
+      origin,
+      cookie: alice.cookie,
+      "content-type": "application/json",
+    },
+  });
+  let delayedStatus;
+  await handleRequest(delayed, {
+    setHeader() {},
+    writeHead(status) {
+      delayedStatus = status;
+    },
+    end() {},
+  });
+  assert.equal(delayedStatus, 409);
   assert.equal(
     (await request("POST", "/api/logout", alice.cookie, {})).status,
     200,

@@ -21,6 +21,7 @@ export type ClubEvent = {
   courtNames: string;
   capacity: number;
   cancelled: boolean;
+  ended: boolean;
   organizerName: string;
   isOrganizer: boolean;
   confirmed: number;

@@ -64,7 +64,7 @@ export function EventDetail({
     lock = useRef(false);
   const dialogTrigger = useRef<HTMLElement | null>(null);
   const path = eventPath(event.id),
-    editable = event.isOrganizer && !event.cancelled;
+    editable = event.isOrganizer && !event.cancelled && !event.ended;
   async function run(work: () => Promise<void>) {
     if (lock.current) return;
     lock.current = true;
@@ -166,15 +166,19 @@ export function EventDetail({
     link.searchParams.set("event", current.id);
     const full = current.confirmed >= current.capacity;
     const billing =
-      !current.cancelled && full && current.sharePerPersonSatang != null;
+      !current.cancelled &&
+      (full || current.ended) &&
+      current.sharePerPersonSatang != null;
     const lines = [
       current.cancelled
         ? "นัดนี้ยกเลิกแล้ว"
-        : billing
-          ? "คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾"
-          : full
-            ? "คนครบแล้ว 🎾"
-            : "ชวนมาตีเทนนิส 🎾",
+        : current.ended
+          ? "สรุปนัดที่จบแล้ว 🎾"
+          : billing
+            ? "คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾"
+            : full
+              ? "คนครบแล้ว 🎾"
+              : "ชวนมาตีเทนนิส 🎾",
       current.title,
       "📅 " +
         dateLabel(current.date) +
@@ -199,13 +203,14 @@ export function EventDetail({
       );
       if (current.sharePerPersonSatang != null)
         lines.push(
-          (full ? "คนละ " : "ยอดหารปัจจุบันคนละ ") +
+          (full || current.ended ? "คนละ " : "ยอดหารปัจจุบันคนละ ") +
             money(current.sharePerPersonSatang) +
             " บาท (หารผู้ได้ที่ " +
             current.sharePeople +
             " คน)",
         );
-      if (!full) lines.push("ยอดต่อคนอาจเปลี่ยนเมื่อจำนวนผู้ได้ที่เปลี่ยน");
+      if (!full && !current.ended)
+        lines.push("ยอดต่อคนอาจเปลี่ยนเมื่อจำนวนผู้ได้ที่เปลี่ยน");
     }
     const footer = [
       "",
@@ -215,7 +220,9 @@ export function EventDetail({
           : "เปิดนัดเพื่อตรวจยอดล่าสุด และติดต่อผู้จัดเรื่องช่องทางโอน แล้วติ๊ก ‘จ่ายแล้ว’ ด้วยน้าาา 🙏"
         : current.cancelled
           ? "ดูรายละเอียดนัด"
-          : "เปิดนัด / ดูรายชื่อ / ลงชื่อ",
+          : current.ended
+            ? "เปิดนัด / ดูรายชื่อ"
+            : "เปิดนัด / ดูรายชื่อ / ลงชื่อ",
       link.href,
     ].join("\n");
     const lists = [
@@ -422,6 +429,11 @@ export function EventDetail({
           <p className="mt-3 font-semibold">{status}</p>
         </aside>
       </div>
+      {event.ended && !event.cancelled && (
+        <p className="mb-5 rounded-xl bg-sage p-4">
+          นัดนี้จบแล้ว ไม่รับลงชื่อหรือแก้รายชื่อและรายละเอียดนัด ยังบันทึกสถานะจ่ายเงินและผลแมตช์ได้
+        </p>
+      )}
       {event.cancelled ? (
         <p className="mb-5 rounded-xl bg-sage p-4">
           นัดนี้ยกเลิกแล้ว รายชื่อด้านล่างเป็นประวัติของนัด
@@ -429,16 +441,18 @@ export function EventDetail({
       ) : (
         <div className="mb-5 flex flex-wrap gap-3">
           <Button
-            disabled={pending}
+            disabled={pending || event.ended}
             variant={event.myPosition ? "outline" : "default"}
             onClick={() => void run(signup)}
             className={"flex-1 " + (event.myPosition ? "text-red-800" : "")}
           >
-            {event.myPosition
-              ? "ถอนชื่อของฉัน"
-              : event.confirmed >= event.capacity
-                ? "เข้าคิวสำรอง"
-                : "ลงชื่อนัดนี้"}
+            {event.ended
+              ? "นัดจบแล้ว"
+              : event.myPosition
+                ? "ถอนชื่อของฉัน"
+                : event.confirmed >= event.capacity
+                  ? "เข้าคิวสำรอง"
+                  : "ลงชื่อนัดนี้"}
           </Button>
           <Button
             variant="outline"
@@ -497,8 +511,9 @@ export function EventDetail({
                   </div>
                 )}
                 <p className="mt-3 text-sm text-muted-foreground">
-                  ยอดเปลี่ยนตามจำนวนผู้เข้าร่วม ไม่รวมคิวสำรองและคนถอนชื่อ เช็คจ่ายเดิมยังอยู่
-                  ผู้จัดตรวจส่วนต่างเอง
+                  {event.ended
+                    ? "ยอดหารตามผู้ได้ที่เมื่อจบนัด ไม่รวมคิวสำรองและคนถอนชื่อ"
+                    : "ยอดเปลี่ยนตามจำนวนผู้เข้าร่วม ไม่รวมคิวสำรองและคนถอนชื่อ เช็คจ่ายเดิมยังอยู่ ผู้จัดตรวจส่วนต่างเอง"}
                 </p>
               </div>
             )}
@@ -552,7 +567,9 @@ export function EventDetail({
             คิวสำรอง · {event.waiting} คน
           </h2>
           <p className="mb-2 text-sm text-muted-foreground">
-            เรียงตามลำดับลงชื่อ คนแรกได้เลื่อนเข้าแทนเมื่อมีคนถอน
+            {event.ended
+              ? "คิวสำรองเมื่อจบนัด เรียงตามลำดับลงชื่อ"
+              : "เรียงตามลำดับลงชื่อ คนแรกได้เลื่อนเข้าแทนเมื่อมีคนถอน"}
           </p>
           {roster(event.waitlist)}
         </section>

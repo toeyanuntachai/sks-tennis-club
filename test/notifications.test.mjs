@@ -8,6 +8,7 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 
 test("OA announces creation once and each not-full to full transition, with signed webhook setup", async (t) => {
+  t.mock.method(Date, "now", () => Date.parse("2026-10-09T19:00:00+07:00"));
   const origin = "https://club.example",
     invite = "test-invite-" + "a".repeat(24);
   const groupId = "C" + "a".repeat(32),

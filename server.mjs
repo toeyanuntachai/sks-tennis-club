@@ -514,6 +514,12 @@ function eventRow(id) {
   if (!event) fail(404, "ไม่พบนัดนี้");
   return event;
 }
+function eventEnded(event) {
+  return Date.now() >= Date.parse(event.date + "T" + event.end + ":00+07:00");
+}
+function requireOpenEvent(event) {
+  if (eventEnded(event)) fail(409, "นัดนี้จบแล้ว ไม่รับลงชื่อหรือแก้ไขนัด");
+}
 function eventView(row, member) {
   const registration = db
     .prepare(`SELECT COUNT(*) AS position FROM registrations
@@ -530,6 +536,7 @@ function eventView(row, member) {
     courtNames: row.court_names,
     capacity: row.capacity,
     cancelled: Boolean(row.cancelled),
+    ended: eventEnded(row),
     organizerId: row.organizer_id,
     organizerName: row.organizer_name,
     confirmed: Math.min(row.total, row.capacity),
@@ -1134,6 +1141,7 @@ export async function handleRequest(req, res) {
         if (event.organizer_id !== member.id)
           fail(403, "เฉพาะผู้สร้างนัดเท่านั้นที่จัดการรายชื่อคนอื่นได้");
         if (event.cancelled) fail(409, "นัดนี้ยกเลิกแล้ว");
+        requireOpenEvent(event);
       };
       if (req.method === "GET" && action === "available-members") {
         organizerEvent();
@@ -1316,6 +1324,7 @@ export async function handleRequest(req, res) {
       if (current.organizer_id !== member.id)
         fail(403, "เฉพาะผู้สร้างนัดเท่านั้นที่แก้ไขได้");
       if (current.cancelled) fail(409, "นัดนี้ยกเลิกแล้ว");
+      requireOpenEvent(current);
       const data = await body(req, 3 * 1024 * 1024),
         fields = eventFields(data);
       atomic(() => {
@@ -1323,6 +1332,7 @@ export async function handleRequest(req, res) {
         if (event.organizer_id !== member.id)
           fail(403, "เฉพาะผู้สร้างนัดเท่านั้นที่แก้ไขได้");
         if (event.cancelled) fail(409, "นัดนี้ยกเลิกแล้ว");
+        requireOpenEvent(event);
         if (fields.capacity < Math.min(event.total, event.capacity))
           fail(409, "จำนวนที่รับต้องไม่น้อยกว่าคนที่ได้ที่แล้ว");
         if (
@@ -1355,8 +1365,10 @@ export async function handleRequest(req, res) {
     if (req.method === "POST" && action === "cancel") {
       await body(req);
       atomic(() => {
-        if (eventRow(id).organizer_id !== member.id)
+        const event = eventRow(id);
+        if (event.organizer_id !== member.id)
           fail(403, "เฉพาะผู้สร้างนัดเท่านั้นที่ยกเลิกได้");
+        requireOpenEvent(event);
         db.prepare("UPDATE events SET cancelled = 1 WHERE id = ?").run(id);
       });
       return send(res, 200, { event: detail(id, member) });
@@ -1369,6 +1381,7 @@ export async function handleRequest(req, res) {
       atomic(() => {
         const before = eventRow(id);
         if (before.cancelled) fail(409, "นัดนี้ยกเลิกแล้ว");
+        requireOpenEvent(before);
         if (req.method === "POST") {
           db.prepare(
             "INSERT INTO registrations(event_id, member_id) VALUES (?, ?) ON CONFLICT(event_id, member_id) DO NOTHING",

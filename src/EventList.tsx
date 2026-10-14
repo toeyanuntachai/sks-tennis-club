@@ -5,6 +5,8 @@ import { api, type ClubEvent, dateLabel } from "./lib/api";
 export function EventBadge({ event: e }: { event: ClubEvent }) {
   if (e.cancelled)
     return <span className="badge bg-stone-200 text-stone-600">ยกเลิกแล้ว</span>;
+  if (e.ended)
+    return <span className="badge bg-stone-200 text-stone-600">จบแล้ว</span>;
   if (e.myPosition && e.myPosition > e.capacity)
     return (
       <span className="badge bg-amber-100 text-amber">
@@ -66,7 +68,14 @@ export function EventList({
         key={e.id}
         className="flex flex-wrap items-center gap-4 border-b border-border py-5 last:border-0"
       >
-        <div className="w-14 shrink-0 rounded-xl bg-sage py-2 text-center">
+        <div
+          className={
+            "w-14 shrink-0 rounded-xl py-2 text-center " +
+            (e.ended || e.cancelled
+              ? "bg-background text-muted-foreground"
+              : "bg-sage")
+          }
+        >
           <b className="block text-2xl">
             {new Date(e.date + "T12:00:00").getDate()}
           </b>
@@ -78,7 +87,7 @@ export function EventList({
         </div>
         <div className="min-w-40 flex-1">
           <EventBadge event={e} />
-          <h2 className="mt-2 text-lg font-bold">{e.title}</h2>
+          <h3 className="mt-2 text-lg font-bold">{e.title}</h3>
           <p className="text-sm text-muted-foreground">
             {dateLabel(e.date)} · {e.start}–{e.end} · {e.courts} คอร์ต
           </p>
@@ -100,12 +109,17 @@ export function EventList({
           onClick={() => onOpen(e.id)}
           className="ml-auto"
         >
-          ดูนัด →
+          {e.ended || e.cancelled ? "ดูประวัติ →" : "ดูนัด →"}
         </Button>
       </article>
     ));
   }
-  const active = events.filter((e) => !e.cancelled),
+  const active = events
+      .filter((e) => !e.cancelled && !e.ended)
+      .sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start)),
+    ended = events
+      .filter((e) => !e.cancelled && e.ended)
+      .sort((a, b) => (b.date + b.start).localeCompare(a.date + a.start)),
     cancelled = events.filter((e) => e.cancelled);
   return (
     <div aria-busy={pending}>
@@ -134,15 +148,50 @@ export function EventList({
         <p role="status" className="py-12 text-center text-muted-foreground">
           {pending ? "กำลังโหลดนัด…" : "โหลดนัดไม่สำเร็จ กดอัปเดตเพื่อลองใหม่"}
         </p>
-      ) : active.length ? (
-        <section className="panel py-0">{rows(active)}</section>
       ) : (
-        <section className="panel py-12 text-center">
-          <h2 className="mb-2 text-lg font-bold">ยังไม่มีนัดที่เปิดอยู่</h2>
-          <p className="text-muted-foreground">
-            จองคอร์ตแล้วกด “เปิดนัด” เพื่อชวนเพื่อนลงชื่อได้เลย
-          </p>
-        </section>
+        <>
+          <section aria-labelledby="upcoming-events-title">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h2 id="upcoming-events-title" className="text-xl font-bold">
+                นัดที่กำลังจะมาถึง
+              </h2>
+              <span className="badge">{active.length} นัด</span>
+            </div>
+            <p className="mb-4 text-sm text-muted-foreground">
+              นัดที่ยังไม่จบ · เลือกนัดเพื่อดูรายละเอียดและลงชื่อ
+            </p>
+            {active.length ? (
+              <div className="panel py-0">{rows(active)}</div>
+            ) : (
+              <div className="panel py-8 text-center">
+                <p className="mb-2 font-semibold">ยังไม่มีนัดที่เปิดอยู่</p>
+                <p className="text-sm text-muted-foreground">
+                  จองคอร์ตแล้วกด “เปิดนัด” เพื่อชวนเพื่อนลงชื่อได้เลย
+                </p>
+              </div>
+            )}
+          </section>
+          <section aria-labelledby="past-events-title" className="mt-8">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h2 id="past-events-title" className="text-xl font-bold">
+                นัดที่ผ่านมา
+              </h2>
+              <span className="badge bg-stone-200 text-stone-600">
+                {ended.length} นัด
+              </span>
+            </div>
+            <p className="mb-4 text-sm text-muted-foreground">
+              จบนัดแล้ว · ดูประวัติ ติ๊กจ่ายเงิน และบันทึกผลแมตช์ได้
+            </p>
+            {ended.length ? (
+              <div className="panel py-0">{rows(ended)}</div>
+            ) : (
+              <div className="panel py-8 text-center text-sm text-muted-foreground">
+                ยังไม่มีนัดที่ผ่านมา
+              </div>
+            )}
+          </section>
+        </>
       )}
       {cancelled.length > 0 && (
         <details className="mt-6">

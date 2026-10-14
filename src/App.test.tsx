@@ -11,6 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
 import { EventForm } from "./EventForm";
+import { EventList } from "./EventList";
 import type { EventDetail } from "./lib/api";
 
 const owner = { id: "owner", nickname: "ผู้จัด" };
@@ -32,6 +33,7 @@ function detail(overrides: Partial<EventDetail> = {}): EventDetail {
     courtNames: "1, 2",
     capacity: 1,
     cancelled: false,
+    ended: false,
     organizerName: owner.nickname,
     confirmed: 1,
     waiting: 0,
@@ -107,6 +109,136 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+test.each([null, 1, 2])(
+  "ended events close attendance and organizer commands but retain payment and scoring (position %s)",
+  async (myPosition) => {
+    const event = detail({
+      ended: true,
+      myPosition,
+      hasPaymentQr: true,
+      totalCostSatang: 10000,
+      sharePerPersonSatang: 10000,
+    });
+    const players = [
+      owner,
+      ...["a", "b", "c"].map((id) => ({ id, nickname: id })),
+    ];
+    const requests = backend(event, ({ path }) => {
+      if (path.endsWith("/matches"))
+        return Response.json({ matches: [], players, canRecord: true });
+      if (path.endsWith("/payment"))
+        return Response.json({
+          event: { ...event, participants: [{ ...guest, paid: false }] },
+        });
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    const signup = await screen.findByRole("button", { name: "นัดจบแล้ว" });
+    expect((signup as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("จบแล้ว")).toBeTruthy();
+    for (const name of [
+      "+ เพิ่มรายชื่อ",
+      "แก้ไขนัด",
+      "ยกเลิกนัด",
+      "ถอนชื่อ: " + guest.nickname,
+      "เพิ่มกลับ: ถอน",
+    ]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    await user.click(signup);
+    expect(requests.some((r) => r.path.endsWith("/signup"))).toBe(false);
+    const payment = screen.getByRole("checkbox", {
+      name: "จ่ายแล้ว: " + guest.nickname,
+    });
+    expect((payment as HTMLButtonElement).disabled).toBe(false);
+    await user.click(payment);
+    await screen.findByText("บันทึกสถานะจ่ายเงินแล้ว");
+    expect(
+      requests.some((r) => r.path.endsWith("/payment") && r.method === "PATCH"),
+    ).toBe(true);
+    expect(
+      (
+        (await screen.findByRole("button", {
+          name: "+ บันทึกผล",
+        })) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+    expect(screen.getByAltText("QR จ่ายเงินที่ผู้จัดแนบ")).toBeTruthy();
+  },
+);
+
+test("ended events are kept in history and remain openable", async () => {
+  const past = detail({
+    id: "past",
+    title: "นัดเก่า",
+    ended: true,
+    myPosition: 1,
+  });
+  const older = detail({
+    id: "older",
+    title: "นัดเก่ากว่า",
+    date: "2026-10-08",
+    ended: true,
+  });
+  const upcoming = detail({ title: "นัดถัดไป", date: "2026-10-16" });
+  const later = detail({ id: "later", title: "นัดถัดจากนั้น", date: "2026-10-17" });
+  const cancelled = detail({
+    id: "cancelled",
+    title: "นัดที่ยกเลิก",
+    ended: true,
+    cancelled: true,
+  });
+  backend(upcoming, ({ path }) =>
+    path === "/api/events"
+      ? Response.json({ events: [later, older, cancelled, past, upcoming] })
+      : undefined,
+  );
+  const open = vi.fn();
+  const user = userEvent.setup();
+  render(<EventList onOpen={open} onCreate={vi.fn()} onError={vi.fn()} />);
+  await screen.findByRole("heading", { name: "นัดถัดไป" });
+  const upcomingSection = screen.getByRole("region", { name: "นัดที่กำลังจะมาถึง" });
+  const pastSection = screen.getByRole("region", { name: "นัดที่ผ่านมา" });
+  expect(within(upcomingSection).getByText("2 นัด")).toBeTruthy();
+  expect(within(pastSection).getByText("2 นัด")).toBeTruthy();
+  expect(
+    within(upcomingSection)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent),
+  ).toEqual(["นัดถัดไป", "นัดถัดจากนั้น"]);
+  expect(
+    within(pastSection)
+      .getAllByRole("heading", { level: 3 })
+      .map((h) => h.textContent),
+  ).toEqual(["นัดเก่า", "นัดเก่ากว่า"]);
+  expect(screen.getByText("นัดที่ยกเลิก · 1 นัด")).toBeTruthy();
+  const row = screen
+    .getByRole("heading", { name: "นัดเก่า" })
+    .closest("article")!;
+  expect(within(row).getByText("จบแล้ว")).toBeTruthy();
+  expect(within(row).queryByText("คุณลงชื่อแล้ว")).toBeNull();
+  await user.click(within(row).getByRole("button", { name: "ดูประวัติ →" }));
+  expect(open).toHaveBeenCalledWith("past");
+  await user.click(
+    within(upcomingSection).getAllByRole("button", { name: "ดูนัด →" })[0],
+  );
+  expect(open).toHaveBeenCalledWith("e");
+});
+
+test("event sections explain empty upcoming and past lists", async () => {
+  backend(detail(), ({ path }) =>
+    path === "/api/events" ? Response.json({ events: [] }) : undefined,
+  );
+  render(<EventList onOpen={vi.fn()} onCreate={vi.fn()} onError={vi.fn()} />);
+  const upcoming = await screen.findByRole("region", { name: "นัดที่กำลังจะมาถึง" });
+  const past = screen.getByRole("region", { name: "นัดที่ผ่านมา" });
+  expect(within(upcoming).getByText("0 นัด")).toBeTruthy();
+  expect(within(upcoming).getByText("ยังไม่มีนัดที่เปิดอยู่")).toBeTruthy();
+  expect(within(past).getByText("0 นัด")).toBeTruthy();
+  expect(within(past).getByText("ยังไม่มีนัดที่ผ่านมา")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "+ เปิดนัด" })).toBeTruthy();
 });
 
 test("roster photos appear in each list, fall back on failure, and retry when the URL changes", async () => {
@@ -833,6 +965,18 @@ test("share uses LINE target picker and preserves the event link without recreat
 });
 
 test.each([
+  {
+    overrides: {
+      ended: true,
+      capacity: 2,
+      totalCostSatang: 20000,
+      sharePerPersonSatang: 20000,
+      hasPaymentQr: true,
+    },
+    heading: "สรุปนัดที่จบแล้ว 🎾",
+    expected: "คนละ 200 บาท",
+    absent: "ยอดต่อคนอาจเปลี่ยน",
+  },
   {
     overrides: {
       capacity: 2,

@@ -9,7 +9,8 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 
 test("monthly doubles ranking, corrections, permissions, duplicate requests and durable history", async (t) => {
-  const now = new Date("2026-10-01T00:05:00+07:00").getTime();
+  const reviewTime = Date.parse("2026-10-01T00:05:00+07:00");
+  let now = reviewTime;
   t.mock.method(Date, "now", () => now);
   const origin = "https://ranking.example",
     databasePath = join(
@@ -85,6 +86,12 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
     capacity: 2,
   };
   async function event(overrides = {}) {
+    const previousTime = now;
+    const schedule = { ...fields, ...overrides };
+    now = Math.min(
+      now,
+      Date.parse(schedule.date + "T" + schedule.end + ":00+07:00") - 1,
+    );
     const result = await request("POST", "/api/events", "a", {
       ...fields,
       ...overrides,
@@ -94,6 +101,7 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
     await request("POST", path + "/participants", "a", {
       memberIds: ["a", "b", "c", "d"],
     });
+    now = previousTime;
     return path;
   }
   const path = await event(),
@@ -117,6 +125,7 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
     path.split("/").at(-1),
     "c",
   );
+  now = Date.parse("2026-09-30T19:59:59+07:00");
   await request("DELETE", path + "/signup", "c", {});
   const selectable = (await request("GET", matches)).data.players;
   assert.deepEqual(
@@ -135,6 +144,7 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
   const guest = (
     await request("POST", path + "/participants", "a", { nickname: "guest" })
   ).data.event.waitlist.find((p) => p.isGuest);
+  now = reviewTime;
   for (const invalid of [
     { ...payload, teamA: ["a", "a"] },
     { ...payload, teamA: ["a"] },
@@ -218,8 +228,9 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
     409,
   );
   assert.equal(
-    (await request("PATCH", path, "a", { ...fields, title: "แก้ชื่อได้" })).status,
-    200,
+    (await request("PATCH", path, "a", { ...fields, title: "แก้ชื่อหลังจบไม่ได้" }))
+      .status,
+    409,
   );
   assert.equal((await request("GET", path)).data.event.dateLocked, true);
   assert.equal(
@@ -273,7 +284,9 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
     ],
   );
   // Correct a player as organizer, moving their points without touching attendance/payment.
+  now = Date.parse("2026-09-30T19:59:59+07:00");
   await request("POST", path + "/participants", "a", { memberId: "e" });
+  now = reviewTime;
   assert.equal(
     (
       await request("PATCH", matches + "/" + match.id, "a", {
@@ -291,7 +304,9 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
   );
   assert.equal(amended.updatedBy.id, "a");
   assert.equal(amended.createdBy.id, "b");
+  now = Date.parse("2026-09-30T19:59:59+07:00");
   assert.equal((await request("POST", path + "/cancel", "a", {})).status, 200);
+  now = reviewTime;
   assert.equal(
     (
       await request("POST", matches, "b", {
