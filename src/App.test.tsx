@@ -241,6 +241,51 @@ test("event sections explain empty upcoming and past lists", async () => {
   expect(screen.getByRole("button", { name: "+ เปิดนัด" })).toBeTruthy();
 });
 
+test.each([false, true])(
+  "admins see their role and can manage other organizers' payments while respecting ended events (%s)",
+  async (ended) => {
+    const event = detail({
+      isOrganizer: false,
+      canManage: true,
+      organizerName: "ผู้จัดนัดคนอื่น",
+      ended,
+    });
+    backend(event, ({ path }) => {
+      if (path === "/api/me")
+        return Response.json({ member: { ...owner, isAdmin: true } });
+      if (path.endsWith("/payment"))
+        return Response.json({
+          event: { ...event, participants: [{ ...guest, paid: false }] },
+        });
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByRole("heading", { name: event.title });
+    expect(screen.getByText("แอดมิน", { exact: true })).toBeTruthy();
+    expect(screen.getByText("ผู้จัดนัดคนอื่น", { exact: true })).toBeTruthy();
+    for (const name of ["+ เพิ่มรายชื่อ", "แก้ไขนัด", "ยกเลิกนัด"]) {
+      expect(Boolean(screen.queryByRole("button", { name }))).toBe(!ended);
+    }
+    await user.click(
+      screen.getByRole("checkbox", { name: "จ่ายแล้ว: " + guest.nickname }),
+    );
+    await screen.findByText("บันทึกสถานะจ่ายเงินแล้ว");
+  },
+);
+
+test("management controls use server permissions instead of trusting the admin badge", async () => {
+  backend(detail({ isOrganizer: false, canManage: false }), ({ path }) =>
+    path === "/api/me"
+      ? Response.json({ member: { ...owner, isAdmin: true } })
+      : undefined,
+  );
+  render(<App />);
+  await screen.findByRole("heading", { name: "นัดที่แชร์" });
+  expect(screen.queryByRole("button", { name: "แก้ไขนัด" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "+ เพิ่มรายชื่อ" })).toBeNull();
+  expect(screen.queryByRole("checkbox")).toBeNull();
+});
+
 test("roster photos appear in each list, fall back on failure, and retry when the URL changes", async () => {
   const pictureUrl = "https://profile.line-scdn.net/player";
   const player = {

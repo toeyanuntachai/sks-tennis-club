@@ -64,7 +64,8 @@ export function EventDetail({
     lock = useRef(false);
   const dialogTrigger = useRef<HTMLElement | null>(null);
   const path = eventPath(event.id),
-    editable = event.isOrganizer && !event.cancelled && !event.ended;
+    canManage = event.canManage ?? event.isOrganizer,
+    editable = canManage && !event.cancelled && !event.ended;
   async function run(work: () => Promise<void>) {
     if (lock.current) return;
     lock.current = true;
@@ -304,7 +305,7 @@ export function EventDetail({
                   </small>
                 )}
               </span>
-              {!event.cancelled && (event.isOrganizer || p.id === member.id) ? (
+              {!event.cancelled && (canManage || p.id === member.id) ? (
                 <Label className="flex min-h-11 shrink-0 gap-2 text-sm font-normal">
                   <Checkbox
                     checked={p.paid}
@@ -542,7 +543,7 @@ export function EventDetail({
       )}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          สมาชิกบันทึกสถานะจ่ายเงินของตัวเองได้ ผู้เปิดนัดแก้ไขได้ทุกคน
+          สมาชิกบันทึกสถานะจ่ายเงินของตัวเองได้ ผู้เปิดนัดและแอดมินแก้ไขได้ทุกคน
           {editable && " · ติ๊กเมื่อได้รับเงินแล้ว"}
         </p>
         {editable && (

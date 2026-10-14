@@ -28,6 +28,12 @@ if (
 const channelId = process.env.LINE_LOGIN_CHANNEL_ID || "";
 const liffId = process.env.LINE_LIFF_ID || "";
 const inviteCode = process.env.SKS_INVITE_CODE || "";
+const adminMemberIds = new Set(
+  (process.env.SKS_ADMIN_MEMBER_IDS || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
+);
 const ready = Boolean(channelId && liffId && inviteCode.length >= 24);
 const messagingSecret = process.env.LINE_MESSAGING_CHANNEL_SECRET || "";
 const databasePath =
@@ -337,12 +343,11 @@ function currentMember(req) {
     /(?:^|;\s*)sks_session=([A-Za-z0-9_-]{43})(?:;|$)/,
   )?.[1];
   if (!token) return null;
-  return (
-    db
-      .prepare(`SELECT m.id, m.nickname FROM sessions s JOIN members m ON m.id = s.member_id
+  const member = db
+    .prepare(`SELECT m.id, m.nickname FROM sessions s JOIN members m ON m.id = s.member_id
     WHERE s.token_hash = ? AND s.expires > ? AND m.line_id IS NOT NULL`)
-      .get(digest(token), Date.now()) || null
-  );
+    .get(digest(token), Date.now());
+  return member ? { ...member, isAdmin: adminMemberIds.has(member.id) } : null;
 }
 async function body(req, limit = 16384) {
   if (!req.headers["content-type"]?.startsWith("application/json"))
@@ -520,6 +525,9 @@ function eventEnded(event) {
 function requireOpenEvent(event) {
   if (eventEnded(event)) fail(409, "นัดนี้จบแล้ว ไม่รับลงชื่อหรือแก้ไขนัด");
 }
+function canManageEvent(event, member) {
+  return event.organizer_id === member.id || adminMemberIds.has(member.id);
+}
 function eventView(row, member) {
   const registration = db
     .prepare(`SELECT COUNT(*) AS position FROM registrations
@@ -543,6 +551,7 @@ function eventView(row, member) {
     waiting: Math.max(0, row.total - row.capacity),
     myPosition: registration.position || null,
     isOrganizer: row.organizer_id === member.id,
+    canManage: canManageEvent(row, member),
   };
 }
 function detail(id, member) {
@@ -620,7 +629,7 @@ function matchView(row, member, event) {
     voided: Boolean(row.voided),
     canEdit:
       !row.voided &&
-      (row.created_by === member.id || event.organizer_id === member.id),
+      (row.created_by === member.id || canManageEvent(event, member)),
   };
 }
 function matchDetail(id, member) {
@@ -809,7 +818,7 @@ async function authenticate(req, res) {
   });
   res.setHeader("Set-Cookie", cookie(token));
   send(res, 200, {
-    member,
+    member: { ...member, isAdmin: adminMemberIds.has(member.id) },
     suggestedNickname:
       typeof identity.name === "string" ? identity.name.slice(0, 40) : "",
   });
@@ -1076,8 +1085,8 @@ export async function handleRequest(req, res) {
             .prepare("SELECT * FROM matches WHERE id=? AND event_id=?")
             .get(participantId, id);
           if (!row) fail(404, "ไม่พบแมตช์นี้");
-          if (row.created_by !== member.id && event.organizer_id !== member.id)
-            fail(403, "เฉพาะผู้กรอกหรือผู้เปิดนัดเท่านั้นที่แก้ผลได้");
+          if (row.created_by !== member.id && !canManageEvent(event, member))
+            fail(403, "เฉพาะผู้กรอก ผู้เปิดนัด หรือแอดมินเท่านั้นที่แก้ผลได้");
           if (row.voided) fail(409, "ผลนี้ยกเลิกแล้ว");
           if (data.version !== row.version)
             fail(409, "ผลนี้มีการเปลี่ยนแปลงแล้ว กรุณาอัปเดตก่อนแก้");
@@ -1138,8 +1147,8 @@ export async function handleRequest(req, res) {
       // Check authority again inside the write transaction before touching any roster data.
       const organizerEvent = () => {
         const event = eventRow(id);
-        if (event.organizer_id !== member.id)
-          fail(403, "เฉพาะผู้สร้างนัดเท่านั้นที่จัดการรายชื่อคนอื่นได้");
+        if (!canManageEvent(event, member))
+          fail(403, "เฉพาะผู้สร้างนัดหรือแอดมินเท่านั้นที่จัดการรายชื่อคนอื่นได้");
         if (event.cancelled) fail(409, "นัดนี้ยกเลิกแล้ว");
         requireOpenEvent(event);
       };
@@ -1296,8 +1305,8 @@ export async function handleRequest(req, res) {
       if (typeof data.paid !== "boolean") fail(400, "สถานะจ่ายเงินไม่ถูกต้อง");
       atomic(() => {
         const event = eventRow(id);
-        if (event.organizer_id !== member.id && memberId !== member.id)
-          fail(403, "เปลี่ยนสถานะจ่ายเงินได้เฉพาะของตัวเองหรือเป็นผู้สร้างนัด");
+        if (!canManageEvent(event, member) && memberId !== member.id)
+          fail(403, "เปลี่ยนสถานะจ่ายเงินได้เฉพาะของตัวเอง ผู้สร้างนัด หรือแอดมิน");
         if (event.cancelled) fail(409, "นัดนี้ยกเลิกแล้ว");
         const registered = db
           .prepare(
@@ -1321,16 +1330,16 @@ export async function handleRequest(req, res) {
     }
     if (req.method === "PATCH" && !action) {
       const current = eventRow(id);
-      if (current.organizer_id !== member.id)
-        fail(403, "เฉพาะผู้สร้างนัดเท่านั้นที่แก้ไขได้");
+      if (!canManageEvent(current, member))
+        fail(403, "เฉพาะผู้สร้างนัดหรือแอดมินเท่านั้นที่แก้ไขได้");
       if (current.cancelled) fail(409, "นัดนี้ยกเลิกแล้ว");
       requireOpenEvent(current);
       const data = await body(req, 3 * 1024 * 1024),
         fields = eventFields(data);
       atomic(() => {
         const event = eventRow(id);
-        if (event.organizer_id !== member.id)
-          fail(403, "เฉพาะผู้สร้างนัดเท่านั้นที่แก้ไขได้");
+        if (!canManageEvent(event, member))
+          fail(403, "เฉพาะผู้สร้างนัดหรือแอดมินเท่านั้นที่แก้ไขได้");
         if (event.cancelled) fail(409, "นัดนี้ยกเลิกแล้ว");
         requireOpenEvent(event);
         if (fields.capacity < Math.min(event.total, event.capacity))
@@ -1366,8 +1375,8 @@ export async function handleRequest(req, res) {
       await body(req);
       atomic(() => {
         const event = eventRow(id);
-        if (event.organizer_id !== member.id)
-          fail(403, "เฉพาะผู้สร้างนัดเท่านั้นที่ยกเลิกได้");
+        if (!canManageEvent(event, member))
+          fail(403, "เฉพาะผู้สร้างนัดหรือแอดมินเท่านั้นที่ยกเลิกได้");
         requireOpenEvent(event);
         db.prepare("UPDATE events SET cancelled = 1 WHERE id = ?").run(id);
       });

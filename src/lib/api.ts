@@ -2,6 +2,7 @@ export type Member = {
   id: string;
   nickname: string | null;
   pictureUrl?: string | null;
+  isAdmin?: boolean;
 };
 export type Participant = {
   id: string;
@@ -24,6 +25,7 @@ export type ClubEvent = {
   ended: boolean;
   organizerName: string;
   isOrganizer: boolean;
+  canManage?: boolean;
   confirmed: number;
   waiting: number;
   myPosition: number | null;

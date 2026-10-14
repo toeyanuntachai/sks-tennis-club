@@ -181,6 +181,11 @@ export function App() {
             >
               ออก
             </Button>
+            {member.isAdmin && (
+              <p className="text-right text-xs font-semibold text-leaf">
+                แอดมิน
+              </p>
+            )}
           </div>
         )}
       </header>
