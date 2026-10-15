@@ -123,26 +123,32 @@ export function EventList({
     cancelled = events.filter((e) => e.cancelled);
   return (
     <div aria-busy={pending}>
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <p className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground">
-            จองคอร์ตแล้ว นัดเพื่อนได้เลย
-          </p>
-          <h1 id="page-title" tabIndex={-1} className="text-3xl font-bold">
+      <div className="mb-4 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 sm:mb-6 sm:gap-4">
+        <div className="min-w-0">
+          <h1
+            id="page-title"
+            tabIndex={-1}
+            className="text-2xl font-bold sm:text-3xl"
+          >
             นัดตีของกลุ่ม
           </h1>
-          <p className="mt-2 text-muted-foreground">ลงชื่อครั้งเดียว เจอกันทั้งนัด</p>
+          <p className="mt-1 text-sm text-muted-foreground sm:mt-2 sm:text-base">
+            ลงชื่อครั้งเดียว เจอกันทั้งนัด
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            จองคอร์ตแล้ว นัดเพื่อนได้เลย
+          </p>
         </div>
-        <Button onClick={onCreate}>+ เปิดนัด</Button>
-      </div>
-      <div className="mb-4 flex justify-end">
-        <Button
-          variant="link"
-          disabled={pending}
-          onClick={() => void refresh()}
-        >
-          อัปเดตรายชื่อ
-        </Button>
+        <div className="flex flex-col items-end">
+          <Button onClick={onCreate}>+ เปิดนัด</Button>
+          <Button
+            variant="link"
+            disabled={pending}
+            onClick={() => void refresh()}
+          >
+            อัปเดตรายชื่อ
+          </Button>
+        </div>
       </div>
       {!loaded ? (
         <p role="status" className="py-12 text-center text-muted-foreground">
