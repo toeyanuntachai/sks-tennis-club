@@ -99,7 +99,7 @@ export function EventList({
             )}
           </small>
         </div>
-        <div className="min-w-40 flex-1">
+        <div className="min-w-40 flex-1 wrap-break-word">
           <EventBadge event={e} />
           <h3 className="mt-2 text-lg font-bold">{e.title}</h3>
           <p className="text-sm text-muted-foreground">
@@ -164,7 +164,7 @@ export function EventList({
             อัปเดตรายชื่อ
           </Button>
           {lastUpdated && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground tabular-nums">
               อัปเดตล่าสุด{" "}
               {lastUpdated.toLocaleTimeString("th-TH", {
                 timeZone: "Asia/Bangkok",
