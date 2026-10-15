@@ -473,7 +473,7 @@ test("shared event is read after LIFF normalizes the URL; member names remain te
     "/api/events/e/matches",
   ]);
   expect(screen.getByRole("button", { name: "ถอนชื่อของฉัน" })).toBeTruthy();
-  expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+  expect(screen.getAllByRole("checkbox")).toHaveLength(2);
   expect(
     screen.getByRole("checkbox", { name: "จ่ายแล้ว: " + guest.nickname }),
   ).toBeTruthy();
@@ -860,9 +860,9 @@ test.each(["participants", "waitlist", "withdrawn"] as const)(
     const user = userEvent.setup();
     render(<App />);
     const checkbox = await screen.findByRole("checkbox", {
-      name: "จ่ายแล้ว: " + owner.nickname,
+      name: "สถานะจ่ายของฉัน",
     });
-    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
     expect(screen.queryByRole("button", { name: "+ เพิ่มรายชื่อ" })).toBeNull();
     expect(screen.queryByRole("button", { name: "แก้ไขนัด" })).toBeNull();
     await user.click(checkbox);
@@ -873,6 +873,11 @@ test.each(["participants", "waitlist", "withdrawn"] as const)(
     await waitFor(() =>
       expect(checkbox.getAttribute("aria-checked")).toBe("true"),
     );
+    expect(
+      screen
+        .getByRole("checkbox", { name: "จ่ายแล้ว: " + owner.nickname })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
     expect(requests.filter((r) => r.method === "PATCH").at(-1)).toMatchObject({
       path: "/api/events/e/payment",
       data: { memberId: owner.id, paid: true },
@@ -1096,6 +1101,68 @@ test.each([1, 2])(
     await user.click(within(dialog).getByRole("button", { name: "ยืนยันถอนชื่อ" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(attempts).toBe(2);
+  },
+);
+
+test.each([
+  {
+    roster: "participants",
+    ended: false,
+    cancelled: false,
+    amount: null,
+    text: "ยังไม่ระบุยอดต่อคน",
+  },
+  {
+    roster: "participants",
+    ended: true,
+    cancelled: false,
+    amount: 36000,
+    text: "ยอดเมื่อจบนัด 360 บาท/คน",
+  },
+  {
+    roster: "participants",
+    ended: false,
+    cancelled: true,
+    amount: 36000,
+    text: "สถานะจ่ายที่บันทึกไว้",
+  },
+  {
+    roster: "waitlist",
+    ended: false,
+    cancelled: false,
+    amount: 36000,
+    text: "ไม่รวมในยอดหาร",
+  },
+  {
+    roster: "withdrawn",
+    ended: false,
+    cancelled: false,
+    amount: 36000,
+    text: "ไม่รวมในยอดหาร",
+  },
+] as const)(
+  "personal summary reflects $roster, ended=$ended, cancelled=$cancelled",
+  async ({ roster, ended, cancelled, amount, text }) => {
+    backend(
+      detail({
+        participants: [],
+        waitlist: [],
+        withdrawn: [],
+        [roster]: [{ ...owner, isGuest: false, paid: true }],
+        myPosition:
+          roster === "participants" ? 1 : roster === "waitlist" ? 2 : null,
+        ended,
+        cancelled,
+        sharePerPersonSatang: amount,
+      }),
+    );
+    render(<App />);
+    const summary = await screen.findByRole("region", { name: "สรุปของฉัน" });
+    expect(within(summary).getByText(text)).toBeTruthy();
+    expect(Boolean(within(summary).queryByRole("checkbox"))).toBe(!cancelled);
+    if (cancelled) expect(within(summary).getByText("จ่ายแล้ว")).toBeTruthy();
+    if (roster === "withdrawn")
+      expect(screen.getByText("คุณถอนชื่อแล้ว")).toBeTruthy();
   },
 );
 

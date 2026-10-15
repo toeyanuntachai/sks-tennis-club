@@ -256,6 +256,37 @@ export function EventDetail({
     if (result === "copied") notify("คัดลอกข้อความแล้ว นำไปส่งในกลุ่ม LINE ได้เลย");
     if (result === "manual") openDialog({ type: "share", text }, trigger);
   }
+  function paymentStatus(p: Participant, label: string) {
+    return !event.cancelled && (canManage || p.id === member.id) ? (
+      <Label className="flex min-h-11 shrink-0 gap-2 text-sm font-normal">
+        <Checkbox
+          checked={p.paid}
+          disabled={pending}
+          aria-label={label}
+          onCheckedChange={(paid) =>
+            void run(() =>
+              mutate(
+                "/payment",
+                "PATCH",
+                { memberId: p.id, paid: paid === true },
+                "บันทึกสถานะจ่ายเงินแล้ว",
+              ),
+            )
+          }
+        />
+        <span>{p.paid ? "จ่ายแล้ว" : "ยังไม่จ่าย"}</span>
+      </Label>
+    ) : (
+      <span
+        className={
+          "shrink-0 text-sm " +
+          (p.paid ? "font-semibold text-leaf" : "text-muted-foreground")
+        }
+      >
+        {p.paid ? "จ่ายแล้ว" : "ยังไม่จ่าย"}
+      </span>
+    );
+  }
   function roster(people: Participant[], withdrawn = false) {
     const action = (p: Participant, label: string, work: () => void) => (
       <Button
@@ -307,37 +338,7 @@ export function EventDetail({
                   </small>
                 )}
               </span>
-              {!event.cancelled && (canManage || p.id === member.id) ? (
-                <Label className="flex min-h-11 shrink-0 gap-2 text-sm font-normal">
-                  <Checkbox
-                    checked={p.paid}
-                    disabled={pending}
-                    aria-label={"จ่ายแล้ว: " + p.nickname}
-                    onCheckedChange={(paid) =>
-                      void run(() =>
-                        mutate(
-                          "/payment",
-                          "PATCH",
-                          { memberId: p.id, paid: paid === true },
-                          "บันทึกสถานะจ่ายเงินแล้ว",
-                        ),
-                      )
-                    }
-                  />
-                  <span>{p.paid ? "จ่ายแล้ว" : "ยังไม่จ่าย"}</span>
-                </Label>
-              ) : (
-                <span
-                  className={
-                    "shrink-0 text-sm " +
-                    (p.paid
-                      ? "font-semibold text-leaf"
-                      : "text-muted-foreground")
-                  }
-                >
-                  {p.paid ? "จ่ายแล้ว" : "ยังไม่จ่าย"}
-                </span>
-              )}
+              {paymentStatus(p, "จ่ายแล้ว: " + p.nickname)}
             </div>
             {editable && (
               <div className="ml-12 flex flex-wrap gap-x-4">
@@ -382,10 +383,20 @@ export function EventDetail({
     );
   }
   const status = !event.myPosition
-    ? "ยังไม่ได้ลงชื่อ"
+    ? event.withdrawn.some((person) => person.id === member.id)
+      ? "คุณถอนชื่อแล้ว"
+      : "ยังไม่ได้ลงชื่อ"
     : event.myPosition <= event.capacity
       ? "คุณได้ที่ในนัดนี้แล้ว"
       : "คุณอยู่คิวสำรองลำดับ " + (event.myPosition - event.capacity);
+  const myRecord = [
+    ...event.participants,
+    ...event.waitlist,
+    ...event.withdrawn,
+  ].find((person) => person.id === member.id);
+  const myConfirmed = event.participants.some(
+    (person) => person.id === member.id,
+  );
   const fact = (label: string, value: string) => (
     <div>
       <dt className="text-sm text-muted-foreground">{label}</dt>
@@ -394,7 +405,7 @@ export function EventDetail({
   );
   return (
     <div aria-busy={pending}>
-      <div className="mb-6 flex justify-between">
+      <div className="mb-3 flex justify-between md:mb-6">
         <Button variant="ghost" disabled={pending} onClick={onBack}>
           ← นัดทั้งหมด
         </Button>
@@ -406,14 +417,18 @@ export function EventDetail({
           อัปเดตรายชื่อ
         </Button>
       </div>
-      <div className="mb-5 grid gap-5 md:grid-cols-[1.4fr_1fr]">
+      <div className="mb-5 grid gap-3 md:grid-cols-[1.4fr_1fr] md:gap-5">
         <section className="panel">
           <EventBadge event={event} />
-          <h1 id="page-title" tabIndex={-1} className="my-4 text-3xl font-bold">
+          <h1
+            id="page-title"
+            tabIndex={-1}
+            className="my-2 text-2xl font-bold md:my-4 md:text-3xl"
+          >
             {event.title}
           </h1>
           <p>{event.venue}</p>
-          <dl className="mt-6 grid grid-cols-2 gap-5">
+          <dl className="mt-3 grid grid-cols-2 gap-3 md:mt-6 md:gap-5">
             {fact("วันตี", dateLabel(event.date))}
             {fact("เวลา", event.start + "–" + event.end)}
             {fact("คอร์ตที่จอง", event.courtNames)}
@@ -421,15 +436,57 @@ export function EventDetail({
           </dl>
         </section>
         <aside className="panel flex flex-col justify-center bg-sage">
-          <p className="text-xs font-semibold tracking-wide text-leaf">
+          <p className="hidden text-xs font-semibold tracking-wide text-leaf md:block">
             ลงชื่อทั้งนัด
           </p>
-          <p className="my-3 text-5xl font-bold">
+          <p className="order-first font-semibold md:order-last md:mt-3">
+            {event.cancelled ? "นัดนี้ยกเลิกแล้ว" : status}
+          </p>
+          <p className="my-1 text-base md:my-3 md:text-5xl md:font-bold">
             {event.confirmed}{" "}
-            <span className="text-xl font-normal">/ {event.capacity} คน</span>
+            <span className="font-normal md:text-xl">
+              / {event.capacity} คน
+            </span>
           </p>
           <p>คิวสำรอง {event.waiting} คน</p>
-          <p className="mt-3 font-semibold">{status}</p>
+          {myRecord && (
+            <section
+              className="mt-3 border-t border-border pt-3 md:hidden"
+              aria-label="สรุปของฉัน"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+                <p>
+                  {event.cancelled
+                    ? "สถานะจ่ายที่บันทึกไว้"
+                    : myConfirmed
+                      ? event.sharePerPersonSatang != null
+                        ? (event.ended ? "ยอดเมื่อจบนัด " : "ยอดปัจจุบัน ") +
+                          money(event.sharePerPersonSatang) +
+                          " บาท/คน"
+                        : "ยังไม่ระบุยอดต่อคน"
+                      : "ไม่รวมในยอดหาร"}
+                </p>
+                {paymentStatus(myRecord, "สถานะจ่ายของฉัน")}
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                บันทึกด้วยมือ ไม่ยืนยันยอดโอน
+                {myConfirmed &&
+                  !event.ended &&
+                  !event.cancelled &&
+                  " · ยอดเปลี่ยนได้แม้ติ๊กจ่ายแล้ว"}
+              </p>
+              {event.hasPaymentQr && !event.cancelled && (
+                <Button
+                  variant="outline"
+                  disabled={pending}
+                  className="mt-3 w-full"
+                  onClick={() => openDialog({ type: "qr" })}
+                >
+                  ดู QR จ่ายเงิน
+                </Button>
+              )}
+            </section>
+          )}
         </aside>
       </div>
       {event.ended && !event.cancelled && (
