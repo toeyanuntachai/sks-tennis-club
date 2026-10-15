@@ -32,25 +32,39 @@ export function EventList({
   const [events, setEvents] = useState<ClubEvent[]>([]),
     [pending, setPending] = useState(true);
   const [loaded, setLoaded] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null),
+    [refreshFailed, setRefreshFailed] = useState(false),
+    [refreshNotice, setRefreshNotice] = useState("");
   const activeRequest = useRef(false),
     mounted = useRef(true);
-  const refresh = useCallback(async () => {
-    if (activeRequest.current) return;
-    activeRequest.current = true;
-    setPending(true);
-    try {
-      const result = await api<{ events: ClubEvent[] }>("/events");
-      if (mounted.current) {
-        setEvents(result.events);
-        setLoaded(true);
+  const refresh = useCallback(
+    async (manual = false) => {
+      if (activeRequest.current) return;
+      activeRequest.current = true;
+      setPending(true);
+      setRefreshNotice(manual ? "กำลังอัปเดตนัด…" : "");
+      try {
+        const result = await api<{ events: ClubEvent[] }>("/events");
+        if (mounted.current) {
+          setEvents(result.events);
+          setLoaded(true);
+          setLastUpdated(new Date());
+          setRefreshFailed(false);
+          if (manual) setRefreshNotice("อัปเดตนัดแล้ว");
+        }
+      } catch (err) {
+        if (mounted.current) {
+          setRefreshFailed(true);
+          if (manual) setRefreshNotice("อัปเดตนัดไม่สำเร็จ กรุณาลองใหม่");
+          onError(err);
+        }
+      } finally {
+        activeRequest.current = false;
+        if (mounted.current) setPending(false);
       }
-    } catch (err) {
-      if (mounted.current) onError(err);
-    } finally {
-      activeRequest.current = false;
-      if (mounted.current) setPending(false);
-    }
-  }, [onError]);
+    },
+    [onError],
+  );
   useEffect(() => {
     mounted.current = true;
     void refresh();
@@ -107,6 +121,7 @@ export function EventList({
         <Button
           variant="outline"
           onClick={() => onOpen(e.id)}
+          aria-label={`${e.ended || e.cancelled ? "ดูประวัติ" : "ดูนัด"}: ${e.title} · ${dateLabel(e.date)}`}
           className="ml-auto"
         >
           {e.ended || e.cancelled ? "ดูประวัติ →" : "ดูนัด →"}
@@ -144,12 +159,31 @@ export function EventList({
           <Button
             variant="link"
             disabled={pending}
-            onClick={() => void refresh()}
+            onClick={() => void refresh(true)}
           >
             อัปเดตรายชื่อ
           </Button>
+          {lastUpdated && (
+            <p className="text-xs text-muted-foreground">
+              อัปเดตล่าสุด{" "}
+              {lastUpdated.toLocaleTimeString("th-TH", {
+                timeZone: "Asia/Bangkok",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              })}
+            </p>
+          )}
         </div>
       </div>
+      <span role="status" className="sr-only">
+        {refreshNotice}
+      </span>
+      {loaded && refreshFailed && (
+        <p className="mb-4 text-sm text-amber">
+          อัปเดตนัดไม่สำเร็จ ข้อมูลที่แสดงอาจไม่ใช่ล่าสุด กด “อัปเดตรายชื่อ” เพื่อลองใหม่
+        </p>
+      )}
       {!loaded ? (
         <p role="status" className="py-12 text-center text-muted-foreground">
           {pending ? "กำลังโหลดนัด…" : "โหลดนัดไม่สำเร็จ กดอัปเดตเพื่อลองใหม่"}

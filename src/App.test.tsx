@@ -12,7 +12,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
 import { EventForm } from "./EventForm";
 import { EventList } from "./EventList";
-import type { EventDetail } from "./lib/api";
+import { dateLabel, type EventDetail } from "./lib/api";
 
 const owner = { id: "owner", nickname: "ผู้จัด" };
 const guest = {
@@ -219,12 +219,105 @@ test("ended events are kept in history and remain openable", async () => {
     .closest("article")!;
   expect(within(row).getByText("จบแล้ว")).toBeTruthy();
   expect(within(row).queryByText("คุณลงชื่อแล้ว")).toBeNull();
-  await user.click(within(row).getByRole("button", { name: "ดูประวัติ →" }));
+  await user.click(
+    within(row).getByRole("button", {
+      name: `ดูประวัติ: ${past.title} · ${dateLabel(past.date)}`,
+    }),
+  );
   expect(open).toHaveBeenCalledWith("past");
   await user.click(
-    within(upcomingSection).getAllByRole("button", { name: "ดูนัด →" })[0],
+    within(upcomingSection).getByRole("button", {
+      name: `ดูนัด: ${upcoming.title} · ${dateLabel(upcoming.date)}`,
+    }),
   );
   expect(open).toHaveBeenCalledWith("e");
+  await user.click(screen.getByText("นัดที่ยกเลิก · 1 นัด"));
+  await user.click(
+    screen.getByRole("button", {
+      name: `ดูประวัติ: ${cancelled.title} · ${dateLabel(cancelled.date)}`,
+    }),
+  );
+  expect(open).toHaveBeenCalledWith("cancelled");
+});
+
+test("list manual refresh announces progress, prevents duplicate requests, and updates the success time", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-15T10:00:00Z"));
+  let result: Promise<Response> | undefined;
+  const requests = backend(detail(), ({ path }) =>
+    path === "/api/events" ? result : undefined,
+  );
+  await act(async () => {
+    render(<EventList onOpen={vi.fn()} onCreate={vi.fn()} onError={vi.fn()} />);
+  });
+  expect(screen.getByText("อัปเดตล่าสุด 17:00:00")).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toBe("");
+  let finish!: (response: Response) => void;
+  result = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const refresh = screen.getByRole("button", { name: "อัปเดตรายชื่อ" });
+  fireEvent.click(refresh);
+  fireEvent.click(refresh);
+  expect((refresh as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("status").textContent).toBe("กำลังอัปเดตนัด…");
+  expect(requests.filter((r) => r.path === "/api/events")).toHaveLength(2);
+  vi.setSystemTime(new Date("2026-10-15T10:01:00Z"));
+  await act(async () => {
+    finish(Response.json({ events: [detail({ title: "นัดอัปเดตแล้ว" })] }));
+  });
+  expect(screen.getByRole("heading", { name: "นัดอัปเดตแล้ว" })).toBeTruthy();
+  expect(screen.getByText("อัปเดตล่าสุด 17:01:00")).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toBe("อัปเดตนัดแล้ว");
+  expect((refresh as HTMLButtonElement).disabled).toBe(false);
+  result = undefined;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15000);
+  });
+  expect(screen.getByRole("status").textContent).toBe("");
+  expect(screen.getByText("อัปเดตล่าสุด 17:01:15")).toBeTruthy();
+});
+
+test("list keeps stale-data guidance and the last success time after polling fails, then clears them on retry", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-10-15T10:00:00Z"));
+  let fail = false;
+  backend(detail(), ({ path }) =>
+    path === "/api/events" && fail
+      ? Response.json({ message: "โหลดไม่ได้" }, { status: 500 })
+      : undefined,
+  );
+  const onError = vi.fn();
+  await act(async () => {
+    render(<EventList onOpen={vi.fn()} onCreate={vi.fn()} onError={onError} />);
+  });
+  fail = true;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(15000);
+  });
+  expect(onError).toHaveBeenCalledOnce();
+  expect(screen.getByRole("heading", { name: "นัดที่แชร์" })).toBeTruthy();
+  expect(screen.getByText("อัปเดตล่าสุด 17:00:00")).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toBe("");
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6000);
+  });
+  expect(screen.getByText(/ข้อมูลที่แสดงอาจไม่ใช่ล่าสุด/)).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "อัปเดตรายชื่อ" }));
+  });
+  expect(onError).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole("status").textContent).toBe(
+    "อัปเดตนัดไม่สำเร็จ กรุณาลองใหม่",
+  );
+  expect(screen.getByText(/ข้อมูลที่แสดงอาจไม่ใช่ล่าสุด/)).toBeTruthy();
+  fail = false;
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "อัปเดตรายชื่อ" }));
+  });
+  expect(screen.queryByText(/ข้อมูลที่แสดงอาจไม่ใช่ล่าสุด/)).toBeNull();
+  expect(screen.getByText("อัปเดตล่าสุด 17:00:21")).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toBe("อัปเดตนัดแล้ว");
 });
 
 test("event sections explain empty upcoming and past lists", async () => {
