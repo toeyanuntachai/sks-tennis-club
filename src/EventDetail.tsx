@@ -499,7 +499,9 @@ export function EventDetail({
                 ) : (
                   <div className="mt-5 rounded-xl bg-sage p-4">
                     <p className="text-sm">
-                      หารผู้ได้ที่ในนัด {event.sharePeople} คน
+                      {event.ended ? "ยอดหารเมื่อจบนัด" : "ยอดหารปัจจุบัน"}
+                      {" · ผู้ได้ที่ "}
+                      {event.sharePeople} คน
                     </p>
                     <p className="mt-2 text-3xl font-bold">
                       {money(event.sharePerPersonSatang)}{" "}
@@ -509,13 +511,13 @@ export function EventDetail({
                       ปัดขึ้นเป็นบาท · ส่วนเกินรวม{" "}
                       {money(event.roundingSurplusSatang!)} บาท
                     </p>
+                    <p className="mt-3 text-sm">
+                      {event.ended
+                        ? "ไม่รวมคิวสำรองและคนถอนชื่อ"
+                        : "ยอดต่อคนเปลี่ยนได้เมื่อจำนวนผู้ได้ที่เปลี่ยน แม้ติ๊กจ่ายแล้ว โปรดเทียบยอดที่โอนกับยอดล่าสุด ผู้จัดตรวจส่วนต่างเอง"}
+                    </p>
                   </div>
                 )}
-                <p className="mt-3 text-sm text-muted-foreground">
-                  {event.ended
-                    ? "ยอดหารตามผู้ได้ที่เมื่อจบนัด ไม่รวมคิวสำรองและคนถอนชื่อ"
-                    : "ยอดเปลี่ยนตามจำนวนผู้เข้าร่วม ไม่รวมคิวสำรองและคนถอนชื่อ เช็คจ่ายเดิมยังอยู่ ผู้จัดตรวจส่วนต่างเอง"}
-                </p>
               </div>
             )}
             {event.hasPaymentQr && (
@@ -542,10 +544,15 @@ export function EventDetail({
         </section>
       )}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          สมาชิกบันทึกสถานะจ่ายเงินของตัวเองได้ ผู้เปิดนัดและแอดมินแก้ไขได้ทุกคน
-          {editable && " · ติ๊กเมื่อได้รับเงินแล้ว"}
-        </p>
+        <div className="min-w-0 basis-full space-y-1 text-sm sm:flex-1 sm:basis-auto">
+          <p className="font-semibold">
+            สถานะจ่ายเป็นบันทึกด้วยมือ ไม่ใช่การยืนยันยอดโอนจากธนาคาร
+          </p>
+          <p className="text-muted-foreground">
+            สมาชิกติ๊กของตัวเองเมื่อโอนแล้ว ผู้เปิดนัดและแอดมินแก้ไขได้ทุกคน
+            สถานะจ่ายเดิมยังอยู่แม้ยอดต่อคนเปลี่ยน
+          </p>
+        </div>
         {editable && (
           <Button
             variant="outline"
@@ -572,6 +579,9 @@ export function EventDetail({
               ? "คิวสำรองเมื่อจบนัด เรียงตามลำดับลงชื่อ"
               : "เรียงตามลำดับลงชื่อ คนแรกได้เลื่อนเข้าแทนเมื่อมีคนถอน"}
           </p>
+          <p className="mb-2 text-sm text-muted-foreground">
+            คิวสำรองไม่รวมในยอดหาร หากจ่ายไว้แล้ว ผู้จัดตรวจสอบยอดแยก
+          </p>
           {roster(event.waitlist)}
         </section>
       </div>
@@ -581,7 +591,7 @@ export function EventDetail({
             ถอนชื่อแล้ว · {event.withdrawn.length} คน
           </h2>
           <p className="mb-2 text-sm text-muted-foreground">
-            เก็บสถานะจ่ายไว้ให้ผู้จัดตรวจสอบ ไม่นับเป็นผู้เข้าร่วมหรือคิวสำรอง
+            ไม่รวมในยอดหารและไม่ใช้ที่นั่ง เก็บสถานะจ่ายเดิมไว้ให้ผู้จัดตรวจสอบยอดที่จ่ายไว้
           </p>
           {roster(event.withdrawn, true)}
         </section>

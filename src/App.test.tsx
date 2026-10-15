@@ -837,7 +837,7 @@ test("failed payment leaves the checkbox unchanged; successful response updates 
     expect(checkbox.getAttribute("aria-checked")).toBe("false"),
   );
   expect(screen.getByText("ปัดขึ้นเป็นบาท · ส่วนเกินรวม 2 บาท")).toBeTruthy();
-  expect(screen.getByText("หารผู้ได้ที่ในนัด 3 คน")).toBeTruthy();
+  expect(screen.getByText("ยอดหารปัจจุบัน · ผู้ได้ที่ 3 คน")).toBeTruthy();
 });
 
 test.each(["participants", "waitlist", "withdrawn"] as const)(
