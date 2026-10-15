@@ -28,7 +28,7 @@ import { type ParticipantDraft, ParticipantForm } from "./ParticipantForm";
 type DialogState =
   | { type: "participant"; draft: ParticipantDraft }
   | { type: "remove"; person: Participant }
-  | { type: "cancel" | "qr" }
+  | { type: "cancel" | "qr" | "withdraw" }
   | { type: "share"; text: string }
   | null;
 export function EventDetail({
@@ -63,6 +63,7 @@ export function EventDetail({
   const revision = useRef(0),
     lock = useRef(false);
   const dialogTrigger = useRef<HTMLElement | null>(null);
+  const dialogCancel = useRef<HTMLButtonElement | null>(null);
   const path = eventPath(event.id),
     canManage = event.canManage ?? event.isOrganizer,
     editable = canManage && !event.cancelled && !event.ended;
@@ -146,6 +147,7 @@ export function EventDetail({
       {},
     );
     setEvent(result.event);
+    setDialog(null);
     const promoted = event.waitlist[0];
     notify(
       withdrawing
@@ -443,9 +445,13 @@ export function EventDetail({
         <div className="mb-5 flex flex-wrap gap-3">
           <Button
             disabled={pending || event.ended}
-            variant={event.myPosition ? "outline" : "default"}
-            onClick={() => void run(signup)}
-            className={"flex-1 " + (event.myPosition ? "text-red-800" : "")}
+            variant={event.myPosition ? "ghost" : "default"}
+            onClick={() =>
+              event.myPosition
+                ? openDialog({ type: "withdraw" })
+                : void run(signup)
+            }
+            className={event.myPosition ? "text-red-800" : "flex-1"}
           >
             {event.ended
               ? "นัดจบแล้ว"
@@ -631,6 +637,12 @@ export function EventDetail({
         <DialogContent
           showCloseButton={!pending}
           className="max-h-[90dvh] overflow-y-auto bg-surface"
+          onOpenAutoFocus={(e) => {
+            if (dialog?.type === "withdraw") {
+              e.preventDefault();
+              dialogCancel.current?.focus();
+            }
+          }}
           onEscapeKeyDown={(e) => {
             if (pending) e.preventDefault();
           }}
@@ -669,6 +681,24 @@ export function EventDetail({
                 );
               }}
             />
+          )}
+          {dialog?.type === "withdraw" && (
+            <>
+              <DialogTitle>ถอนชื่อของฉัน?</DialogTitle>
+              <DialogDescription>
+                {event.myPosition! <= event.capacity
+                  ? "คุณจะเสียที่ในนัดนี้ คนแรกในคิวสำรองจะเลื่อนเข้าแทนหากมีคนรอ"
+                  : "คุณจะออกจากคิวสำรอง"}
+                {" หากลงชื่อใหม่ จะเรียงต่อท้ายตามลำดับลงชื่อ สถานะจ่ายเงินเดิมยังอยู่"}
+              </DialogDescription>
+              <Button
+                disabled={pending}
+                variant="destructive"
+                onClick={() => void run(signup)}
+              >
+                {pending ? "กำลังถอนชื่อ…" : "ยืนยันถอนชื่อ"}
+              </Button>
+            </>
           )}
           {dialog?.type === "remove" && (
             <>
@@ -745,6 +775,7 @@ export function EventDetail({
                 </p>
               )}
               <Button
+                ref={dialogCancel}
                 variant="outline"
                 disabled={pending}
                 onClick={() => setDialog(null)}

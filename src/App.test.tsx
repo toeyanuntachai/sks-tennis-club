@@ -1027,6 +1027,23 @@ test("list opens a new optional-cost event, signs up and withdraws self, cancels
   expect(location.search).toBe("?event=created");
   await user.click(screen.getByRole("button", { name: "ลงชื่อนัดนี้" }));
   await user.click(await screen.findByRole("button", { name: "ถอนชื่อของฉัน" }));
+  expect(screen.getByRole("button", { name: "กลับไปก่อน" })).toBe(
+    document.activeElement,
+  );
+  expect(
+    requests.filter((r) => r.path.endsWith("/signup")).map((r) => r.method),
+  ).toEqual(["POST"]);
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("button", { name: "ถอนชื่อของฉัน" })).toBe(
+    document.activeElement,
+  );
+  await user.click(screen.getByRole("button", { name: "ถอนชื่อของฉัน" }));
+  await user.click(screen.getByRole("button", { name: "กลับไปก่อน" }));
+  expect(
+    requests.filter((r) => r.path.endsWith("/signup")).map((r) => r.method),
+  ).toEqual(["POST"]);
+  await user.click(screen.getByRole("button", { name: "ถอนชื่อของฉัน" }));
+  await user.click(screen.getByRole("button", { name: "ยืนยันถอนชื่อ" }));
   await screen.findByRole("button", { name: "ลงชื่อนัดนี้" });
   expect(
     requests.filter((r) => r.path.endsWith("/signup")).map((r) => r.method),
@@ -1038,6 +1055,49 @@ test("list opens a new optional-cost event, signs up and withdraws self, cancels
   await screen.findByRole("heading", { name: /นัดตีครั้งหน้า/ });
   expect(screen.queryByRole("button", { name: owner.nickname })).toBeNull();
 });
+
+test.each([1, 2])(
+  "self withdrawal explains position %s and preserves confirmation after failure",
+  async (myPosition) => {
+    const event = detail({
+      myPosition,
+      waiting: 1,
+      waitlist: [{ ...owner, isGuest: false, paid: false }],
+    });
+    let attempts = 0;
+    const requests = backend(event, ({ path, method }) => {
+      if (path.endsWith("/signup") && method === "DELETE") {
+        attempts++;
+        return attempts === 1
+          ? Response.json({ error: "ถอนชื่อไม่สำเร็จ ลองอีกครั้ง" }, { status: 500 })
+          : Response.json({ event: { ...event, myPosition: null } });
+      }
+    });
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: "ถอนชื่อของฉัน" }));
+    const dialog = screen.getByRole("dialog");
+    expect(
+      within(dialog).getByText(
+        myPosition === 1 ? /คุณจะเสียที่ในนัดนี้/ : /คุณจะออกจากคิวสำรอง/,
+      ),
+    ).toBeTruthy();
+    expect(
+      within(dialog).getByText(/หากลงชื่อใหม่ จะเรียงต่อท้ายตามลำดับลงชื่อ/),
+    ).toBeTruthy();
+    expect(requests.some((r) => r.method === "DELETE")).toBe(false);
+    await user.click(within(dialog).getByRole("button", { name: "ยืนยันถอนชื่อ" }));
+    expect(await within(dialog).findByRole("alert")).toBeTruthy();
+    expect(
+      screen.getByText(
+        myPosition === 1 ? "คุณได้ที่ในนัดนี้แล้ว" : "คุณอยู่คิวสำรองลำดับ 1",
+      ),
+    ).toBeTruthy();
+    await user.click(within(dialog).getByRole("button", { name: "ยืนยันถอนชื่อ" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(attempts).toBe(2);
+  },
+);
 
 test("share uses LINE target picker and preserves the event link without recreating its initial deep-link request", async () => {
   const participants = Array.from({ length: 24 }, (_, i) => ({
