@@ -256,7 +256,7 @@ export class AlmBrowser {
       exact: true,
     });
     if (!(await dateButton.isVisible()) || !(await dateButton.isEnabled()))
-      throw new BookingError("checkout_changed");
+      throw new BookingError("booking_date_not_open");
     const loaded = this.page
       .waitForResponse(
         (response) => {
@@ -480,7 +480,8 @@ export async function runBooking(
           selected = await previewBooking(adapter, schedule);
           break;
         } catch (error) {
-          if (error.code !== "unavailable") throw error;
+          if (!["unavailable", "booking_date_not_open"].includes(error.code))
+            throw error;
           await wait(Math.min(5000, Math.max(0, schedule.stopAt - now())));
         }
       }

@@ -85,7 +85,7 @@ const runOptions = (clock = { time: plan.releaseAt }) => ({
   },
 });
 
-test("Bangkok schedules use seven calendar days, including year boundaries and exact window edges", () => {
+test("Bangkok schedules use six calendar days, including year boundaries and exact window edges", () => {
   assert.deepEqual(plan.courts, ["US7", "US8", "US9"]);
   assert.deepEqual(plan.fallbackSlots, [
     "20:00-21:00",
@@ -95,8 +95,9 @@ test("Bangkok schedules use seven calendar days, including year boundaries and e
   const friday = bookingPlan("2027-01-01");
   assert.deepEqual(friday.courts, ["US7", "US8", "US9"]);
   assert.deepEqual(friday.slots, ["19:00-20:00", "20:00-21:00", "21:00-22:00"]);
-  assert.equal(friday.releaseAt, Date.parse("2026-12-25T06:00:00+07:00"));
+  assert.equal(friday.releaseAt, Date.parse("2026-12-26T06:00:00+07:00"));
   assert.equal(dueBooking(plan.prepareAt - 1), null);
+  assert.equal(dueBooking(Date.parse("2026-12-25T06:00:00+07:00")), null);
   assert.equal(dueBooking(plan.prepareAt).date, plan.date);
   assert.equal(dueBooking(plan.stopAt - 1).date, plan.date);
   assert.equal(dueBooking(plan.stopAt), null);
@@ -448,4 +449,21 @@ test("reconciling a completed run never overwrites paid status when login has ex
   });
   assert.equal(store.get(plan.date).state, "paid");
   assert.equal(site.submitted, 0);
+});
+
+test("the worker waits until 06:00 and retries if the date has not opened", async (t) => {
+  const { store } = memoryStore(t);
+  const site = adapter();
+  const clock = { time: plan.prepareAt };
+  const originalPreview = site.preview;
+  let previews = 0;
+  site.preview = async (candidate) => {
+    assert.ok(clock.time >= plan.releaseAt);
+    if (++previews === 1) throw new BookingError("booking_date_not_open");
+    return originalPreview(candidate);
+  };
+  await runBooking(site, store, plan.date, runOptions(clock));
+  assert.equal(previews, 2);
+  assert.equal(clock.time, plan.releaseAt + 5000);
+  assert.equal(site.submitted, 1);
 });

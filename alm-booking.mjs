@@ -10,6 +10,7 @@ const workerPath = fileURLToPath(
   new URL("./scripts/alm-booking.mjs", import.meta.url),
 );
 const dayMs = 86400000;
+const leadDays = 6;
 
 export class BookingError extends Error {
   constructor(code) {
@@ -28,7 +29,9 @@ export function bookingPlan(date) {
     throw new BookingError("invalid_date");
   const weekday = new Date(time).getUTCDay();
   if (weekday !== 5) throw new BookingError("not_a_playing_day");
-  const releaseDate = new Date(time - 7 * dayMs).toISOString().slice(0, 10);
+  const releaseDate = new Date(time - leadDays * dayMs)
+    .toISOString()
+    .slice(0, 10);
   const releaseAt = Date.parse(releaseDate + "T06:00:00+07:00");
   return {
     date,
@@ -42,7 +45,7 @@ export function bookingPlan(date) {
 }
 
 export function dueBooking(now = Date.now()) {
-  const date = new Date(now + 7 * 3600000 + 7 * dayMs)
+  const date = new Date(now + 7 * 3600000 + leadDays * dayMs)
     .toISOString()
     .slice(0, 10);
   if (new Date(date + "T00:00:00Z").getUTCDay() !== 5) return null;

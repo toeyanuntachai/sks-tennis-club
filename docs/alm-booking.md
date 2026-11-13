@@ -4,7 +4,7 @@ The bot shares the existing SKS Railway service and `/data` volume. It does not 
 
 ## Fixed booking rules
 
-All times use Asia/Bangkok, independently of the server timezone. Prepare at 05:59 on Friday seven days before play, begin checkout at 06:00, and stop new submissions at 06:02.
+All times use Asia/Bangkok, independently of the server timezone. Prepare on Saturday at 05:59, six days before the playing Friday. Begin checkout at 06:00 and stop new submissions at 06:02. ALM offers seven dates including today. If the date has not opened yet, retry within that window.
 
 | Play | Required courts | Hours |
 | --- | --- | --- |
