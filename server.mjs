@@ -10,6 +10,7 @@ import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { startBookingScheduler } from "./alm-booking.mjs";
 import { lineNotifications } from "./line-notifications.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
@@ -1436,6 +1437,13 @@ if (
         "LINE settings are incomplete. See .env.example and README.md.",
       );
     void notifications.flush();
+    const stopBooking = startBookingScheduler(db, databasePath);
+    for (const signal of ["SIGINT", "SIGTERM"]) {
+      process.once(signal, () => {
+        stopBooking();
+        process.exit(0);
+      });
+    }
     setInterval(() => {
       void notifications.flush();
     }, 30000).unref();

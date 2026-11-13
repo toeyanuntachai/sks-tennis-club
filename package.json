@@ -15,7 +15,12 @@
     "test:ui": "vitest run",
     "lint": "biome lint .",
     "format": "biome format --write .",
-    "check": "biome check ."
+    "check": "biome check .",
+    "booking:login": "node --env-file-if-exists=.env scripts/alm-booking.mjs login",
+    "booking:preview": "node --env-file-if-exists=.env scripts/alm-booking.mjs preview",
+    "booking:status": "node --env-file-if-exists=.env scripts/alm-booking.mjs status",
+    "booking:reconcile": "node --env-file-if-exists=.env scripts/alm-booking.mjs reconcile",
+    "test:booking-browser": "node --test test/alm-browser.browser.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
@@ -38,6 +43,7 @@
     "clsx": "^2.1.1",
     "get-nonce": "^1.0.1",
     "lucide-react": "^1.52.0",
+    "playwright": "1.64.1",
     "radix-ui": "^1.6.7",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
