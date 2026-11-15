@@ -1219,8 +1219,8 @@ test("share uses LINE target picker and preserves the event link without recreat
   expect(text).toContain("คนละ 100 บาท (หารผู้ได้ที่ 24 คน)");
   expect(text).toContain("ค่าใช้จ่ายรวม 2,400 บาท");
   for (let i = 1; i <= 24; i++)
-    expect(text).toContain(i + ". ผู้เล่น " + i + "\n");
-  expect(text).toContain("คิวสำรอง\n1. เพื่อนสำรอง");
+    expect(text).toContain(i + ". ผู้เล่น " + i + " ✅\n");
+  expect(text).toContain("คิวสำรอง\n1. เพื่อนสำรอง ✅\n");
   expect(text).toContain("เปิดนัดเพื่อดู QR และตรวจยอดล่าสุดก่อนโอน");
   expect(text).toContain("จ่ายแล้ว");
   expect(text).not.toContain("ถอน");
@@ -1297,6 +1297,36 @@ test.each([
     expect(text).not.toContain(absent);
   },
 );
+
+test("share marks only paid names in the refreshed participants and waitlist", async () => {
+  const participants = [
+    { ...guest, id: "paid", nickname: "จ่ายแล้ว", paid: true },
+    { ...guest, id: "unpaid", nickname: "ยังไม่จ่าย", paid: false },
+  ];
+  let reads = 0;
+  backend(detail(), ({ path }) =>
+    path === "/api/events/e" && ++reads > 1
+      ? Response.json({
+          event: detail({
+            participants,
+            waitlist: participants.map((person) => ({
+              ...person,
+              id: "waiting-" + person.id,
+              nickname: "สำรอง" + person.nickname,
+            })),
+          }),
+        })
+      : undefined,
+  );
+  const user = userEvent.setup();
+  const copy = vi.spyOn(navigator.clipboard, "writeText");
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "แชร์นัดใน LINE" }));
+  await screen.findByText("คัดลอกข้อความแล้ว นำไปส่งในกลุ่ม LINE ได้เลย");
+  expect(copy.mock.calls[0][0]).toContain(
+    "ผู้ได้ที่\n1. จ่ายแล้ว ✅\n2. ยังไม่จ่าย\n\nคิวสำรอง\n1. สำรองจ่ายแล้ว ✅\n2. สำรองยังไม่จ่าย\n",
+  );
+});
 
 test("share keeps payment details and the event link when the roster exceeds LINE text limits", async () => {
   const participants = Array.from({ length: 200 }, (_, i) => ({

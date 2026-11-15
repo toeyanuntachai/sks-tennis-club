@@ -6,3 +6,5 @@ node_modules/
 data/
 public/styles.css
 dist/
+.cursor/skills/verify-sks-tennis-club/run.json
+.cursor/skills/verify-sks-tennis-club/artifacts/

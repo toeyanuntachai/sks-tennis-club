@@ -232,14 +232,16 @@ export function EventDetail({
       "",
       "ผู้ได้ที่",
       ...current.participants.map(
-        (person, i) => i + 1 + ". " + person.nickname,
+        (person, i) =>
+          i + 1 + ". " + person.nickname + (person.paid ? " ✅" : ""),
       ),
       ...(current.waitlist.length
         ? [
             "",
             "คิวสำรอง",
             ...current.waitlist.map(
-              (person, i) => i + 1 + ". " + person.nickname,
+              (person, i) =>
+                i + 1 + ". " + person.nickname + (person.paid ? " ✅" : ""),
             ),
           ]
         : []),
@@ -327,7 +329,7 @@ export function EventDetail({
                   {i + 1}
                 </small>
               </span>
-              <span className="min-w-0 flex-1 break-words">
+              <span className="min-w-0 flex-1 wrap-break-word">
                 {p.nickname}
                 {p.id === member.id && (
                   <small className="ml-2 text-leaf">คุณ</small>

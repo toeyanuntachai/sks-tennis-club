@@ -241,7 +241,7 @@ export function EventForm({
               true,
             )}
           </div>
-          <fieldset className="mt-6 border-t border-border pt-5">
+          <fieldset className="mt-6 pt-5">
             <legend className="pt-5 text-lg font-bold">
               ค่าใช้จ่ายและ QR (ไม่บังคับ)
             </legend>

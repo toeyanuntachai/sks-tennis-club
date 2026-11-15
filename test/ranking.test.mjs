@@ -10,8 +10,7 @@ import { test } from "node:test";
 
 test("monthly doubles ranking, corrections, permissions, duplicate requests and durable history", async (t) => {
   const reviewTime = Date.parse("2026-10-01T00:05:00+07:00");
-  let now = reviewTime;
-  t.mock.method(Date, "now", () => now);
+  t.mock.timers.enable({ apis: ["Date"], now: reviewTime });
   const origin = "https://ranking.example",
     databasePath = join(
       mkdtempSync(join(tmpdir(), "sks-ranking-")),
@@ -30,7 +29,7 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
     db.prepare("INSERT INTO sessions VALUES (?,?,?)").run(
       createHash("sha256").update(id.repeat(43)).digest("hex"),
       id,
-      now + 3600000,
+      Date.now() + 3600000,
     );
   }
   for (const id of ["a", "c", "d"])
@@ -86,11 +85,13 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
     capacity: 2,
   };
   async function event(overrides = {}) {
-    const previousTime = now;
+    const previousTime = Date.now();
     const schedule = { ...fields, ...overrides };
-    now = Math.min(
-      now,
-      Date.parse(schedule.date + "T" + schedule.end + ":00+07:00") - 1,
+    t.mock.timers.setTime(
+      Math.min(
+        previousTime,
+        Date.parse(schedule.date + "T" + schedule.end + ":00+07:00") - 1,
+      ),
     );
     const result = await request("POST", "/api/events", "a", {
       ...fields,
@@ -101,7 +102,7 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
     await request("POST", path + "/participants", "a", {
       memberIds: ["a", "b", "c", "d"],
     });
-    now = previousTime;
+    t.mock.timers.setTime(previousTime);
     return path;
   }
   const path = await event(),
@@ -125,7 +126,7 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
     path.split("/").at(-1),
     "c",
   );
-  now = Date.parse("2026-09-30T19:59:59+07:00");
+  t.mock.timers.setTime(Date.parse("2026-09-30T19:59:59+07:00"));
   await request("DELETE", path + "/signup", "c", {});
   const selectable = (await request("GET", matches)).data.players;
   assert.deepEqual(
@@ -144,7 +145,7 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
   const guest = (
     await request("POST", path + "/participants", "a", { nickname: "guest" })
   ).data.event.waitlist.find((p) => p.isGuest);
-  now = reviewTime;
+  t.mock.timers.setTime(reviewTime);
   for (const invalid of [
     { ...payload, teamA: ["a", "a"] },
     { ...payload, teamA: ["a"] },
@@ -284,9 +285,9 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
     ],
   );
   // Correct a player as organizer, moving their points without touching attendance/payment.
-  now = Date.parse("2026-09-30T19:59:59+07:00");
+  t.mock.timers.setTime(Date.parse("2026-09-30T19:59:59+07:00"));
   await request("POST", path + "/participants", "a", { memberId: "e" });
-  now = reviewTime;
+  t.mock.timers.setTime(reviewTime);
   assert.equal(
     (
       await request("PATCH", matches + "/" + match.id, "a", {
@@ -304,9 +305,9 @@ test("monthly doubles ranking, corrections, permissions, duplicate requests and 
   );
   assert.equal(amended.updatedBy.id, "a");
   assert.equal(amended.createdBy.id, "b");
-  now = Date.parse("2026-09-30T19:59:59+07:00");
+  t.mock.timers.setTime(Date.parse("2026-09-30T19:59:59+07:00"));
   assert.equal((await request("POST", path + "/cancel", "a", {})).status, 200);
-  now = reviewTime;
+  t.mock.timers.setTime(reviewTime);
   assert.equal(
     (
       await request("POST", matches, "b", {
