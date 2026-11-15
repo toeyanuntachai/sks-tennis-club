@@ -412,6 +412,30 @@ test("full cards collect the current per-person amount and include the QR in the
   notifications.enqueue(
     {
       ...billing,
+      costPerPersonSatang: 15050,
+      sharePerPersonSatang: 15050,
+      totalCostSatang: null,
+      sharePeople: null,
+    },
+    "full",
+  );
+  const fixed = JSON.parse(
+    db
+      .prepare(
+        "SELECT payload FROM line_notifications ORDER BY rowid DESC LIMIT 1",
+      )
+      .get().payload,
+  ).messages[0];
+  assert.match(JSON.stringify(fixed), /คนละ 150\.5 บาท/);
+  assert.doesNotMatch(JSON.stringify(fixed), /หาร|ปัดขึ้น|จำนวนผู้ร่วมเปลี่ยน/);
+  assert.equal(
+    fixed.contents.body.contents.find((component) => component.type === "image")
+      .url,
+    billing.paymentQrUrl,
+  );
+  notifications.enqueue(
+    {
+      ...billing,
       sharePerPersonSatang: 0,
       totalCostSatang: 0,
       paymentQrUrl: undefined,

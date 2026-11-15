@@ -44,6 +44,7 @@ function detail(overrides: Partial<EventDetail> = {}): EventDetail {
     withdrawn: [
       { id: "withdrawn", nickname: "ถอน", isGuest: false, paid: true },
     ],
+    costPerPersonSatang: null,
     courtCostSatang: null,
     ballCostSatang: null,
     totalCostSatang: null,
@@ -561,10 +562,9 @@ test("event form retains typed fields and the chosen QR after failure, saves sat
           ...event,
           title: data.title,
           hasPaymentQr: true,
-          courtCostSatang: 100050,
-          totalCostSatang: 100050,
-          sharePerPersonSatang: 100100,
-          roundingSurplusSatang: 50,
+          costPerPersonSatang: 15050,
+          sharePerPersonSatang: 15050,
+          sharePeople: null,
         },
       });
     }
@@ -575,10 +575,8 @@ test("event form retains typed fields and the chosen QR after failure, saves sat
   const title = screen.getByRole("textbox", { name: "ชื่อนัด" });
   await user.clear(title);
   await user.type(title, "นัดแก้ไข");
-  await user.type(screen.getByLabelText("ค่าคอร์ตรวม (บาท)"), "1000.50");
-  const costValue = (
-    screen.getByLabelText("ค่าคอร์ตรวม (บาท)") as HTMLInputElement
-  ).value;
+  const cost = screen.getByLabelText<HTMLInputElement>("ค่าใช้จ่ายต่อคน (บาท)");
+  await user.type(cost, "150.50");
   const file = new File(["png"], "qr.png", { type: "image/png" });
   await user.upload(screen.getByLabelText("รูป QR จ่ายเงิน"), file);
   await screen.findByAltText("ตัวอย่าง QR จ่ายเงิน");
@@ -591,20 +589,21 @@ test("event form retains typed fields and the chosen QR after failure, saves sat
   expect(screen.getByAltText("ตัวอย่าง QR จ่ายเงิน").getAttribute("src")).toBe(
     "data:image/png;base64,cG5n",
   );
-  expect(
-    (screen.getByLabelText("ค่าคอร์ตรวม (บาท)") as HTMLInputElement).value,
-  ).toBe(costValue);
+  expect(cost.valueAsNumber).toBe(150.5);
   fail = false;
   await user.click(screen.getByRole("button", { name: "บันทึกการแก้ไข" }));
   await screen.findByRole("heading", { name: "นัดแก้ไข" });
   expect(requests.filter((r) => r.method !== "GET").at(-1)?.data).toMatchObject(
-    { courtCostSatang: 100050, ballCostSatang: null, paymentQr: "cG5n" },
+    { costPerPersonSatang: 15050, paymentQr: "cG5n" },
   );
-  expect(screen.getByText("ปัดขึ้นเป็นบาท · ส่วนเกินรวม 0.5 บาท")).toBeTruthy();
+  expect(screen.getByText("150.5")).toBeTruthy();
+  expect(screen.queryByText(/ส่วนเกินรวม/)).toBeNull();
+  await user.click(screen.getByRole("button", { name: "ขยาย QR จ่ายเงิน" }));
+  expect(await screen.findByRole("dialog")).toBeTruthy();
 });
 
 test("existing QR is omitted when unchanged, null when removed; optional costs permit blank and zero", async () => {
-  const event = detail({ hasPaymentQr: true });
+  const event = detail({ hasPaymentQr: true, costPerPersonSatang: 15050 });
   const saved = vi.fn();
   const requests = backend(event, ({ path, method }) =>
     path === "/api/events/e" && method === "PATCH"
@@ -620,22 +619,46 @@ test("existing QR is omitted when unchanged, null when removed; optional costs p
       onError={vi.fn()}
     />,
   );
-  await user.type(screen.getByLabelText("ค่าลูกเทนนิสรวม (บาท)"), "0");
+  const cost = screen.getByLabelText<HTMLInputElement>("ค่าใช้จ่ายต่อคน (บาท)");
+  expect(cost.value).toBe("150.5");
+  await user.clear(cost);
+  await user.type(cost, "0");
   await user.click(screen.getByRole("button", { name: "บันทึกการแก้ไข" }));
   await waitFor(() => expect(saved).toHaveBeenCalledTimes(1));
   expect(requests[0].data).toMatchObject({
-    courtCostSatang: null,
-    ballCostSatang: 0,
+    costPerPersonSatang: 0,
   });
   expect(requests[0].data).not.toHaveProperty("paymentQr");
   await user.click(screen.getByRole("button", { name: "ลบรูป QR" }));
   expect(screen.queryByAltText("ตัวอย่าง QR จ่ายเงิน")).toBeNull();
+  await user.clear(cost);
   await user.click(screen.getByRole("button", { name: "บันทึกการแก้ไข" }));
   await waitFor(() => expect(saved).toHaveBeenCalledTimes(2));
-  expect(requests[1].data.paymentQr).toBeNull();
+  expect(requests[1].data).toMatchObject({
+    costPerPersonSatang: null,
+    paymentQr: null,
+  });
 });
 
-test("invalid and oversized QR and negative costs never submit or replace the current preview", async () => {
+test("editing a legacy event with a blank price preserves its cost split", async () => {
+  const event = detail({ courtCostSatang: 100050, totalCostSatang: 100050 });
+  const requests = backend(event, ({ path, method }) =>
+    path === "/api/events/e" && method === "PATCH"
+      ? Response.json({ event })
+      : undefined,
+  );
+  const user = userEvent.setup();
+  render(<App />);
+  await user.click(await screen.findByRole("button", { name: "แก้ไขนัด" }));
+  expect(screen.getByText(/ใช้ยอดหารเดิม/)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "บันทึกการแก้ไข" }));
+  await screen.findByText("ค่าคอร์ตรวม");
+  expect(requests.find((r) => r.method === "PATCH")?.data).not.toHaveProperty(
+    "costPerPersonSatang",
+  );
+});
+
+test("invalid QR and invalid prices never submit or replace the current preview", async () => {
   const requests = backend(detail());
   const user = userEvent.setup({ applyAccept: false });
   render(
@@ -666,8 +689,12 @@ test("invalid and oversized QR and negative costs never submit or replace the cu
   expect(screen.getByAltText("ตัวอย่าง QR จ่ายเงิน").getAttribute("src")).toBe(
     "/api/events/e/payment-qr",
   );
-  await user.type(screen.getByLabelText("ค่าคอร์ตรวม (บาท)"), "-1");
-  await user.click(screen.getByRole("button", { name: "บันทึกการแก้ไข" }));
+  const cost = screen.getByLabelText("ค่าใช้จ่ายต่อคน (บาท)");
+  for (const value of ["-1", "10.001"]) {
+    await user.clear(cost);
+    await user.type(cost, value);
+    await user.click(screen.getByRole("button", { name: "บันทึกการแก้ไข" }));
+  }
   expect(requests).toHaveLength(0);
 });
 
@@ -1023,8 +1050,7 @@ test("list opens a new optional-cost event, signs up and withdraws self, cancels
   await user.click(screen.getByRole("button", { name: "สร้างนัด" }));
   await screen.findByRole("heading", { name: "นัดใหม่" });
   expect(requests.find((r) => r.method === "POST")?.data).toMatchObject({
-    courtCostSatang: null,
-    ballCostSatang: null,
+    costPerPersonSatang: null,
   });
   expect(requests.find((r) => r.method === "POST")?.data).not.toHaveProperty(
     "paymentQr",
@@ -1230,6 +1256,18 @@ test("share uses LINE target picker and preserves the event link without recreat
 });
 
 test.each([
+  {
+    overrides: {
+      confirmed: 0,
+      participants: [],
+      costPerPersonSatang: 15050,
+      sharePerPersonSatang: 15050,
+      sharePeople: null,
+    },
+    heading: "ชวนมาตีเทนนิส 🎾",
+    expected: "คนละ 150.5 บาท",
+    absent: "ยอดต่อคนอาจเปลี่ยน",
+  },
   {
     overrides: {
       ended: true,

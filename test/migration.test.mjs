@@ -60,11 +60,13 @@ for (const guestSchema of [false, true])
             encoding: "utf8",
           },
         );
-      assert.match(startup(), /backup created before cost migration/);
+      const output = startup();
+      assert.match(output, /backup created before cost migration/);
+      assert.match(output, /backup created before per-person cost migration/);
       const backups = readdirSync(directory).filter((name) =>
         name.includes(".before-"),
       );
-      assert.equal(backups.length, guestSchema ? 2 : 3);
+      assert.equal(backups.length, guestSchema ? 3 : 4);
       for (const filename of backups) {
         const backup = new DatabaseSync(join(directory, filename));
         for (const table of tables)
@@ -85,8 +87,17 @@ for (const guestSchema of [false, true])
             .prepare("PRAGMA table_info(events)")
             .all()
             .some((c) => c.name === "court_cost_satang"),
-          filename.includes(".before-ranking-"),
+          filename.includes(".before-ranking-") ||
+            filename.includes(".before-per-person-cost-"),
         );
+        if (filename.includes(".before-per-person-cost-"))
+          assert.equal(
+            backup
+              .prepare("PRAGMA table_info(events)")
+              .all()
+              .some((c) => c.name === "cost_per_person_satang"),
+            false,
+          );
         if (filename.includes(".before-ranking-"))
           assert.equal(
             backup
@@ -128,10 +139,16 @@ for (const guestSchema of [false, true])
       assert.deepEqual(
         {
           ...legacy
-            .prepare("SELECT court_cost_satang,ball_cost_satang FROM events")
+            .prepare(
+              "SELECT court_cost_satang,ball_cost_satang,cost_per_person_satang FROM events",
+            )
             .get(),
         },
-        { court_cost_satang: null, ball_cost_satang: null },
+        {
+          court_cost_satang: null,
+          ball_cost_satang: null,
+          cost_per_person_satang: null,
+        },
       );
       assert.deepEqual(legacy.prepare("PRAGMA foreign_key_check").all(), []);
       for (const table of [
@@ -205,6 +222,28 @@ for (const guestSchema of [false, true])
         qr,
       );
       assert.deepEqual(legacy.prepare("PRAGMA foreign_key_check").all(), []);
+      legacy
+        .prepare(`UPDATE events SET cost_per_person_satang=15050,
+        court_cost_satang=NULL, ball_cost_satang=NULL WHERE id='event'`)
+        .run();
+      assert.equal(startup(), "");
+      assert.equal(
+        legacy.prepare("SELECT cost_per_person_satang FROM events").get()
+          .cost_per_person_satang,
+        15050,
+      );
+      assert.equal(
+        legacy
+          .prepare("SELECT paid FROM event_payments WHERE member_id='player'")
+          .get().paid,
+        1,
+      );
+      assert.deepEqual(
+        Buffer.from(
+          legacy.prepare("SELECT image FROM event_payment_qr").get().image,
+        ),
+        qr,
+      );
       legacy.close();
     },
   );

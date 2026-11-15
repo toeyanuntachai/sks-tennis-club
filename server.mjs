@@ -133,7 +133,8 @@ db.exec(`
     capacity INTEGER NOT NULL CHECK(capacity > 0),
     cancelled INTEGER NOT NULL DEFAULT 0 CHECK(cancelled IN (0, 1)),
     court_cost_satang INTEGER CHECK(court_cost_satang >= 0),
-    ball_cost_satang INTEGER CHECK(ball_cost_satang >= 0)
+    ball_cost_satang INTEGER CHECK(ball_cost_satang >= 0),
+    cost_per_person_satang INTEGER CHECK(cost_per_person_satang >= 0)
   );
   CREATE TABLE IF NOT EXISTS registrations (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,6 +207,33 @@ if (!costColumns.some((column) => column.name === "court_cost_satang")) {
   console.log("Cost migration completed.");
 }
 db.exec(paymentQrSchema);
+
+const hasPerPersonCost = () =>
+  db
+    .prepare("PRAGMA table_info(events)")
+    .all()
+    .some((column) => column.name === "cost_per_person_satang");
+if (!hasPerPersonCost()) {
+  if (databasePath !== ":memory:") {
+    const backup =
+      resolve(databasePath) +
+      ".before-per-person-cost-" +
+      Date.now() +
+      "-" +
+      randomUUID() +
+      ".sqlite";
+    db.prepare("VACUUM INTO ?").run(backup);
+    console.log(
+      "SQLite backup created before per-person cost migration: " + backup,
+    );
+  }
+  atomic(() => {
+    if (!hasPerPersonCost())
+      db.exec(
+        "ALTER TABLE events ADD COLUMN cost_per_person_satang INTEGER CHECK(cost_per_person_satang >= 0)",
+      );
+  });
+}
 
 const matchesSchema = `CREATE TABLE matches (
     id TEXT PRIMARY KEY, event_id TEXT NOT NULL REFERENCES events(id),
@@ -464,7 +492,11 @@ function paymentFields(data, previous = {}) {
       fail(400, "ค่าใช้จ่ายต้องเป็นจำนวนเต็มหน่วยสตางค์และไม่ติดลบ");
     return value;
   };
-  const courtCostSatang = cost("courtCostSatang", "court_cost_satang"),
+  const costPerPersonSatang = cost(
+      "costPerPersonSatang",
+      "cost_per_person_satang",
+    ),
+    courtCostSatang = cost("courtCostSatang", "court_cost_satang"),
     ballCostSatang = cost("ballCostSatang", "ball_cost_satang");
   // Leave room for rounding up at the maximum event size without losing integer precision.
   if (
@@ -498,7 +530,12 @@ function paymentFields(data, previous = {}) {
       qr = { image, mimeType: png ? "image/png" : "image/jpeg" };
     }
   }
-  return { courtCostSatang, ballCostSatang, qr };
+  return {
+    costPerPersonSatang,
+    courtCostSatang: costPerPersonSatang === null ? courtCostSatang : null,
+    ballCostSatang: costPerPersonSatang === null ? ballCostSatang : null,
+    qr,
+  };
 }
 function savePaymentQr(id, qr) {
   if (qr === null)
@@ -558,14 +595,15 @@ function eventView(row, member) {
 function detail(id, member) {
   const row = eventRow(id),
     event = eventView(row, member);
-  const courtCostSatang = row.court_cost_satang,
+  const costPerPersonSatang = row.cost_per_person_satang,
+    courtCostSatang = row.court_cost_satang,
     ballCostSatang = row.ball_cost_satang;
   const totalCostSatang =
     courtCostSatang === null && ballCostSatang === null
       ? null
       : (courtCostSatang ?? 0) + (ballCostSatang ?? 0);
   const divisor = BigInt(event.confirmed) * 100n;
-  const sharePerPersonSatang =
+  const legacyShare =
     totalCostSatang !== null && event.confirmed
       ? Number((BigInt(totalCostSatang) + divisor - 1n) / divisor) * 100
       : null;
@@ -586,15 +624,16 @@ function detail(id, member) {
     .map((p) => ({ ...p, isGuest: Boolean(p.isGuest), paid: Boolean(p.paid) }));
   return {
     ...event,
+    costPerPersonSatang,
     courtCostSatang,
     ballCostSatang,
     totalCostSatang,
-    sharePeople: event.confirmed,
-    sharePerPersonSatang,
+    sharePeople: costPerPersonSatang === null ? event.confirmed : null,
+    sharePerPersonSatang: costPerPersonSatang ?? legacyShare,
     roundingSurplusSatang:
-      sharePerPersonSatang === null
+      legacyShare === null
         ? null
-        : sharePerPersonSatang * event.confirmed - totalCostSatang,
+        : legacyShare * event.confirmed - totalCostSatang,
     hasPaymentQr: Boolean(
       db.prepare("SELECT 1 FROM event_payment_qr WHERE event_id = ?").get(id),
     ),
@@ -986,8 +1025,8 @@ export async function handleRequest(req, res) {
         payment = paymentFields(data),
         id = randomUUID();
       atomic(() => {
-        db.prepare(`INSERT INTO events(id, organizer_id, title, venue, date, start, end, courts, court_names, capacity, court_cost_satang, ball_cost_satang)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        db.prepare(`INSERT INTO events(id, organizer_id, title, venue, date, start, end, courts, court_names, capacity, court_cost_satang, ball_cost_satang, cost_per_person_satang)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
           id,
           member.id,
           fields.title,
@@ -1000,6 +1039,7 @@ export async function handleRequest(req, res) {
           fields.capacity,
           payment.courtCostSatang,
           payment.ballCostSatang,
+          payment.costPerPersonSatang,
         );
         savePaymentQr(id, payment.qr);
         notifications.enqueue(detail(id, member), "created");
@@ -1352,7 +1392,7 @@ export async function handleRequest(req, res) {
           fail(409, "นัดนี้มีผลแมตช์แล้ว เปลี่ยนวันไม่ได้");
         const payment = paymentFields(data, event);
         db.prepare(
-          "UPDATE events SET title=?, venue=?, date=?, start=?, end=?, courts=?, court_names=?, capacity=?, court_cost_satang=?, ball_cost_satang=? WHERE id=?",
+          "UPDATE events SET title=?, venue=?, date=?, start=?, end=?, courts=?, court_names=?, capacity=?, court_cost_satang=?, ball_cost_satang=?, cost_per_person_satang=? WHERE id=?",
         ).run(
           fields.title,
           fields.venue,
@@ -1364,6 +1404,7 @@ export async function handleRequest(req, res) {
           fields.capacity,
           payment.courtCostSatang,
           payment.ballCostSatang,
+          payment.costPerPersonSatang,
           id,
         );
         savePaymentQr(id, payment.qr);

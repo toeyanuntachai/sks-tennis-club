@@ -48,7 +48,7 @@ function welcomeMessage(liffId, inviteCode) {
 🙋 ถ้านัดเต็มแล้ว ระบบจะให้เข้าคิวสำรอง หากมีคนถอนชื่อ จะเลื่อนคิวให้ตามลำดับ
 หากลงชื่อแล้วมาไม่ได้ อย่าลืมถอนชื่อในระบบด้วยน้าาา
 
-💸 เมื่อคนครบ ระบบจะแจ้งยอดค่าใช้จ่ายหารตามจำนวนผู้ได้ที่ในนัด ดู QR จ่ายเงินได้ในหน้านัด และเมื่อโอนแล้วให้ติ๊ก “จ่ายแล้ว” ด้วยครับ
+💸 เมื่อคนครบ ระบบจะแจ้งค่าใช้จ่ายต่อคน ดู QR จ่ายเงินได้ในหน้านัด และเมื่อโอนแล้วให้ติ๊ก “จ่ายแล้ว” ด้วยครับ
 
 แล้วเจอกันในคอร์ตน้าาา 🎾✨`,
           },
@@ -74,6 +74,7 @@ function welcomeMessage(liffId, inviteCode) {
 function notificationMessage(event, kind, liffId, inviteCode) {
   const full = kind === "full";
   const billing = full && event.sharePerPersonSatang != null;
+  const legacyCosts = event.costPerPersonSatang == null;
   const heading = billing
     ? "คนครบแล้ว เย้!! ได้เวลาโอนค่าตีน้าาา 🎾"
     : full
@@ -124,26 +125,27 @@ function notificationMessage(event, kind, liffId, inviteCode) {
     },
   ];
   if (billing) {
-    contents.push(
-      {
-        ...text(
-          "💰 คนละ " + money(event.sharePerPersonSatang) + " บาท",
-          "#576B4F",
-        ),
-        size: "xl",
-        weight: "bold",
-        margin: "md",
-      },
-      text(
-        "ค่าใช้จ่ายรวม " +
-          money(event.totalCostSatang) +
-          " บาท ÷ ผู้ได้ที่ " +
-          event.sharePeople +
-          " คน",
-        "#626F6A",
+    contents.push({
+      ...text(
+        "💰 คนละ " + money(event.sharePerPersonSatang) + " บาท",
+        "#576B4F",
       ),
-      text("ปัดขึ้นเป็นบาท ไม่รวมคิวสำรอง", "#626F6A"),
-    );
+      size: "xl",
+      weight: "bold",
+      margin: "md",
+    });
+    if (legacyCosts)
+      contents.push(
+        text(
+          "ค่าใช้จ่ายรวม " +
+            money(event.totalCostSatang) +
+            " บาท ÷ ผู้ได้ที่ " +
+            event.sharePeople +
+            " คน",
+          "#626F6A",
+        ),
+        text("ปัดขึ้นเป็นบาท ไม่รวมคิวสำรอง", "#626F6A"),
+      );
     if (event.paymentQrUrl)
       contents.push({
         type: "image",
@@ -155,10 +157,11 @@ function notificationMessage(event, kind, liffId, inviteCode) {
         action: { type: "uri", uri: url.href },
       });
     else contents.push(text("เปิดนัดเพื่อดูช่องทางชำระเงิน", "#626F6A"));
-    contents.push(
-      text("เมื่อโอนแล้ว ให้ทำเครื่องหมาย “จ่ายแล้ว” ในระบบด้วยน้าาา 💚"),
-      text("หากจำนวนผู้ร่วมเปลี่ยน กรุณาตรวจยอดล่าสุดในนัดก่อนโอน", "#626F6A"),
-    );
+    contents.push(text("เมื่อโอนแล้ว ให้ทำเครื่องหมาย “จ่ายแล้ว” ในระบบด้วยน้าาา 💚"));
+    if (legacyCosts)
+      contents.push(
+        text("หากจำนวนผู้ร่วมเปลี่ยน กรุณาตรวจยอดล่าสุดในนัดก่อนโอน", "#626F6A"),
+      );
   }
   if (full) {
     const names = [];

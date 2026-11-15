@@ -199,7 +199,9 @@ export function EventDetail({
         current.waiting +
         " คน",
     ];
-    if (!current.cancelled && current.totalCostSatang != null) {
+    if (!current.cancelled && current.costPerPersonSatang != null) {
+      lines.push("", "💰 คนละ " + money(current.costPerPersonSatang) + " บาท");
+    } else if (!current.cancelled && current.totalCostSatang != null) {
       lines.push(
         "",
         "💰 ค่าใช้จ่ายรวม " + money(current.totalCostSatang) + " บาท",
@@ -466,7 +468,9 @@ export function EventDetail({
                           money(event.sharePerPersonSatang) +
                           " บาท/คน"
                         : "ยังไม่ระบุยอดต่อคน"
-                      : "ไม่รวมในยอดหาร"}
+                      : event.costPerPersonSatang != null
+                        ? "ยังไม่มียอดที่ต้องจ่าย"
+                        : "ไม่รวมในยอดหาร"}
                 </p>
                 {paymentStatus(myRecord, "สถานะจ่ายของฉัน")}
               </div>
@@ -529,7 +533,9 @@ export function EventDetail({
           </Button>
         </div>
       )}
-      {(event.totalCostSatang != null || event.hasPaymentQr) && (
+      {(event.costPerPersonSatang != null ||
+        event.totalCostSatang != null ||
+        event.hasPaymentQr) && (
         <section className="panel mb-5">
           <h2 className="mb-4 text-xl font-bold">ค่าใช้จ่ายและการจ่ายเงิน</h2>
           <div
@@ -537,6 +543,15 @@ export function EventDetail({
               "grid gap-6 " + (event.hasPaymentQr ? "sm:grid-cols-2" : "")
             }
           >
+            {event.costPerPersonSatang != null && (
+              <div className="self-start rounded-xl bg-sage p-4">
+                <p className="text-sm">ค่าใช้จ่ายสำหรับผู้ได้ที่</p>
+                <p className="mt-2 text-3xl font-bold">
+                  {money(event.costPerPersonSatang)}{" "}
+                  <span className="text-base font-normal">บาท/คน</span>
+                </p>
+              </div>
+            )}
             {event.totalCostSatang != null && (
               <div>
                 <dl className="space-y-2">
@@ -645,7 +660,7 @@ export function EventDetail({
               : "เรียงตามลำดับลงชื่อ คนแรกได้เลื่อนเข้าแทนเมื่อมีคนถอน"}
           </p>
           <p className="mb-2 text-sm text-muted-foreground">
-            คิวสำรองไม่รวมในยอดหาร หากจ่ายไว้แล้ว ผู้จัดตรวจสอบยอดแยก
+            ผู้ได้ที่เท่านั้นที่ต้องจ่าย หากจ่ายไว้แล้ว ผู้จัดตรวจสอบยอดแยก
           </p>
           {roster(event.waitlist)}
         </section>
@@ -656,7 +671,7 @@ export function EventDetail({
             ถอนชื่อแล้ว · {event.withdrawn.length} คน
           </h2>
           <p className="mb-2 text-sm text-muted-foreground">
-            ไม่รวมในยอดหารและไม่ใช้ที่นั่ง เก็บสถานะจ่ายเดิมไว้ให้ผู้จัดตรวจสอบยอดที่จ่ายไว้
+            เก็บสถานะจ่ายเดิมไว้ให้ผู้จัดตรวจสอบยอดที่จ่ายไว้
           </p>
           {roster(event.withdrawn, true)}
         </section>

@@ -86,6 +86,7 @@ test("optional costs and QR save atomically, follow confirmed attendance, and ob
   const emptyPath = "/api/events/" + response.data.event.id;
   assert.equal(response.status, 201);
   for (const key of [
+    "costPerPersonSatang",
     "courtCostSatang",
     "ballCostSatang",
     "totalCostSatang",
@@ -124,6 +125,33 @@ test("optional costs and QR save atomically, follow confirmed attendance, and ob
       ).status,
       400,
     );
+  }
+  for (const value of [-1, 1.5, "123", Number.MAX_SAFE_INTEGER + 1]) {
+    assert.equal(
+      (
+        await request("POST", "/api/events", "owner", {
+          ...fields,
+          costPerPersonSatang: value,
+        })
+      ).status,
+      400,
+    );
+  }
+  for (const value of [0, 15050]) {
+    const result = await request("POST", "/api/events", "owner", {
+      ...fields,
+      costPerPersonSatang: value,
+    });
+    assert.equal(result.status, 201);
+    assert.equal(result.data.event.confirmed, 0);
+    assert.equal(result.data.event.costPerPersonSatang, value);
+    assert.equal(result.data.event.sharePerPersonSatang, value);
+    for (const key of [
+      "totalCostSatang",
+      "sharePeople",
+      "roundingSurplusSatang",
+    ])
+      assert.equal(result.data.event[key], null);
   }
   for (const value of [
     Buffer.from("<svg></svg>").toString("base64"),
@@ -278,7 +306,7 @@ test("optional costs and QR save atomically, follow confirmed attendance, and ob
       await request("PATCH", path, "owner", {
         ...fields,
         title: "ต้องไม่ถูกบันทึก",
-        courtCostSatang: 1,
+        costPerPersonSatang: 15050,
         paymentQr,
       })
     ).status,
@@ -286,6 +314,7 @@ test("optional costs and QR save atomically, follow confirmed attendance, and ob
   );
   event = (await request("GET", path)).data.event;
   assert.equal(event.title, "แก้ชื่ออย่างเดียว");
+  assert.equal(event.costPerPersonSatang, null);
   assert.equal(event.courtCostSatang, 90000);
   assert.deepEqual((await request("GET", path + "/payment-qr")).bytes, png);
   db.exec("DROP TRIGGER fail_qr_insert");
@@ -302,6 +331,40 @@ test("optional costs and QR save atomically, follow confirmed attendance, and ob
   assert.equal(event.roundingSurplusSatang, 50);
   assert.equal(event.hasPaymentQr, false);
   assert.equal((await request("GET", path + "/payment-qr")).status, 404);
+  event = (
+    await request("PATCH", path, "owner", {
+      ...fields,
+      costPerPersonSatang: 15050,
+      paymentQr,
+    })
+  ).data.event;
+  assert.equal(event.courtCostSatang, null);
+  assert.equal(event.ballCostSatang, null);
+  assert.equal(event.sharePerPersonSatang, 15050);
+  assert.equal(event.participants.find((p) => p.id === "other").paid, true);
+  event = (
+    await request("POST", path + "/participants", "owner", {
+      memberId: "third",
+    })
+  ).data.event;
+  assert.equal(event.confirmed, 3);
+  assert.equal(event.sharePerPersonSatang, 15050);
+  event = (await request("DELETE", path + "/participants/third", "owner", {}))
+    .data.event;
+  assert.equal(event.confirmed, 2);
+  assert.equal(event.sharePerPersonSatang, 15050);
+  event = (await request("PATCH", path, "owner", fields)).data.event;
+  assert.equal(event.costPerPersonSatang, 15050);
+  assert.deepEqual((await request("GET", path + "/payment-qr")).bytes, png);
+  event = (
+    await request("PATCH", path, "owner", {
+      ...fields,
+      costPerPersonSatang: null,
+    })
+  ).data.event;
+  assert.equal(event.sharePerPersonSatang, null);
+  assert.equal(event.totalCostSatang, null);
+  assert.equal(event.hasPaymentQr, true);
   // MIME type is inferred from bytes, with no user-supplied file path or MIME trusted.
   const jpeg = Buffer.from(
     "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3+iiigD//2Q==",

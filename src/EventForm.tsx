@@ -76,21 +76,20 @@ export function EventForm({
     courts: 2,
     capacity: 12,
     courtNames: "",
-    courtCostSatang: null,
-    ballCostSatang: null,
+    costPerPersonSatang: null,
   };
+  const legacyCosts =
+    event != null &&
+    event.costPerPersonSatang == null &&
+    event.totalCostSatang != null;
   const [draft, setDraft] = useState({
     ...initial,
     courts: String(initial.courts),
     capacity: String(initial.capacity),
-    courtCost:
-      initial.courtCostSatang == null
+    costPerPerson:
+      initial.costPerPersonSatang == null
         ? ""
-        : String(initial.courtCostSatang / 100),
-    ballCost:
-      initial.ballCostSatang == null
-        ? ""
-        : String(initial.ballCostSatang / 100),
+        : String(initial.costPerPersonSatang / 100),
   });
   const [qr, setQr] = useState<{
     value: string | null | undefined;
@@ -135,8 +134,9 @@ export function EventForm({
         courts: Number(draft.courts),
         capacity: Number(draft.capacity),
         courtNames: draft.courtNames,
-        courtCostSatang: costSatang(draft.courtCost),
-        ballCostSatang: costSatang(draft.ballCost),
+        ...(legacyCosts && draft.costPerPerson === ""
+          ? {}
+          : { costPerPersonSatang: costSatang(draft.costPerPerson) }),
         ...(qr.value === undefined ? {} : { paymentQr: qr.value }),
       };
       const result = await api<{ event: EventDetail }>(
@@ -162,8 +162,7 @@ export function EventForm({
       | "courts"
       | "capacity"
       | "courtNames"
-      | "courtCost"
-      | "ballCost",
+      | "costPerPerson",
     label: string,
     type: string,
     extra: React.ComponentProps<typeof Input> = {},
@@ -245,25 +244,27 @@ export function EventForm({
             <legend className="pt-5 text-lg font-bold">
               ค่าใช้จ่ายและ QR (ไม่บังคับ)
             </legend>
-            <div className="mt-4 grid grid-cols-2 gap-4">
-              {field("courtCost", "ค่าคอร์ตรวม (บาท)", "number", {
+            <div className="mt-4">
+              {field("costPerPerson", "ค่าใช้จ่ายต่อคน (บาท)", "number", {
                 required: false,
                 min: 0,
                 step: "0.01",
                 inputMode: "decimal",
                 placeholder: "ไม่ระบุ",
-              })}
-              {field("ballCost", "ค่าลูกเทนนิสรวม (บาท)", "number", {
-                required: false,
-                min: 0,
-                step: "0.01",
-                inputMode: "decimal",
-                placeholder: "ไม่ระบุ",
+                "aria-describedby": "cost-per-person-help",
               })}
             </div>
-            <p className="mt-3 text-sm text-muted-foreground">
-              รวมค่าใช้จ่ายที่ระบุ หารเฉพาะผู้ได้ที่ในนัด และปัดขึ้นเป็นบาท
+            <p
+              id="cost-per-person-help"
+              className="mt-2 text-sm text-muted-foreground"
+            >
+              ยอดจ่ายทั้งหมดต่อคน รวมค่าคอร์ตและค่าลูก
             </p>
+            {legacyCosts && (
+              <p className="mt-2 text-sm text-muted-foreground">
+                นัดนี้ใช้ยอดหารเดิมจนกว่าจะบันทึกค่าใช้จ่ายต่อคน
+              </p>
+            )}
             <Label htmlFor="payment-qr-file" className="mt-5">
               รูป QR จ่ายเงิน
             </Label>

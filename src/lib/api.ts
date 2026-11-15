@@ -31,10 +31,11 @@ export type ClubEvent = {
   myPosition: number | null;
 };
 export type EventDetail = ClubEvent & {
+  costPerPersonSatang: number | null;
   courtCostSatang: number | null;
   ballCostSatang: number | null;
   totalCostSatang: number | null;
-  sharePeople: number;
+  sharePeople: number | null;
   sharePerPersonSatang: number | null;
   roundingSurplusSatang: number | null;
   hasPaymentQr: boolean;
@@ -54,8 +55,7 @@ export type EventFields = Pick<
   | "courtNames"
   | "capacity"
 > & {
-  courtCostSatang: number | null;
-  ballCostSatang: number | null;
+  costPerPersonSatang?: number | null;
   paymentQr?: string | null;
 };
 export class ApiError extends Error {
